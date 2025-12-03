@@ -1,0 +1,56 @@
+/* Veritas Custom Styles */
+
+:root {
+    --primary-color: #00ff41;
+    --dark-bg: #0e1117;
+    --secondary-bg: #262730;
+    --text-color: #fafafa;
+    --border-color: #30363d;
+}
+
+/* Main container */
+.main {
+    background-color: var(--dark-bg);
+    color: var(--text-color);
+}
+
+/* Sidebar */
+.sidebar {
+    background-color: var(--secondary-bg);
+    border-right: 1px solid var(--border-color);
+}
+
+/* Headers */
+h1, h2, h3 {
+    color: var(--primary-color);
+}
+
+/* Buttons */
+button {
+    background-color: var(--primary-color) !important;
+    color: var(--dark-bg) !important;
+    font-weight: bold;
+}
+
+button:hover {
+    opacity: 0.8;
+}
+
+/* Cards and containers */
+.element-container {
+    background-color: var(--secondary-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 1rem;
+}
+
+/* Code blocks */
+code {
+    background-color: var(--secondary-bg);
+    color: var(--primary-color);
+}
+
+/* Info boxes */
+.stAlert {
+    border-radius: 4px;
+}
