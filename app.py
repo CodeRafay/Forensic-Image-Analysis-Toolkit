@@ -1,6 +1,5 @@
 import streamlit as st
 import os
-from PIL import Image
 from analysis import (
     ela, metadata_analysis, histogram_analysis, noise_map, jpeg_ghost,
     quant_table, cmfd, prnu, frequency_analysis, deepfake_detector, resampling_detector
@@ -25,23 +24,120 @@ def save_uploaded_file(uploaded_file):
     return file_path
 
 
-# 3. Sidebar
+# 3. Helper: Load Technique Description
+def load_description(technique_name):
+    """
+    Load markdown description for a forensic technique.
+
+    Args:
+        technique_name: Name of technique (e.g., 'ELA', 'Metadata', 'FFT')
+
+    Returns:
+        String containing markdown content, or error message if not found
+    """
+    description_file = os.path.join("Descriptions", f"{technique_name}.md")
+
+    if os.path.exists(description_file):
+        try:
+            with open(description_file, 'r', encoding='utf-8') as f:
+                return f.read()
+        except Exception as e:
+            return f"Error loading description: {str(e)}"
+    else:
+        return f"Description file not found: {description_file}"
+
+
+# 4. Technique Description Mapping
+TECHNIQUES = {
+    "🕵️ ELA": "ELA",
+    "📋 Metadata": "Metadata",
+    "📊 Histogram": "Histogram",
+    "👻 Noise/Ghost": "Noise_Ghost",
+    "💾 Quantization": "Quantization",
+    "🔄 CMFD": "CMFD",
+    "📡 PRNU": "PRNU",
+    "📈 Frequency": "Frequency",
+    "😁 Deepfake": "Deepfake",
+    "🔀 Resampling": "Resampling",
+}
+
+
+# 5. Default Sample Image Path
+DEFAULT_SAMPLE_IMAGE = os.path.join(
+    "assets", "sample images", "sampleImg.jpeg")
+
+# 6. Sidebar - File Upload Section
 st.sidebar.title("🔍 Veritas Tool")
-st.sidebar.info("Upload a digital image to perform forensic analysis.")
+st.sidebar.info(
+    "Upload a digital image to perform forensic analysis, or test with the default sample image.")
 uploaded_file = st.sidebar.file_uploader(
     "Choose an Image", type=["jpg", "jpeg", "png"])
 
-# 4. Main Logic
+# Show info about default sample
+if uploaded_file is None and os.path.exists(DEFAULT_SAMPLE_IMAGE):
+    st.sidebar.success("📸 Using default sample image for testing")
+    st.sidebar.caption("Upload your own image above to analyze it instead")
+
+# 7. Sidebar - Technique Descriptions Section
+st.sidebar.markdown("---")
+st.sidebar.subheader("📚 Technique Descriptions")
+st.sidebar.caption("Learn about each forensic analysis method")
+
+# Create columns for description buttons
+desc_cols = st.sidebar.columns(2)
+selected_description = None
+
+for idx, (display_name, technique_key) in enumerate(TECHNIQUES.items()):
+    col = desc_cols[idx % 2]
+    if col.button(display_name, key=f"desc_{technique_key}", use_container_width=True):
+        selected_description = technique_key
+        st.session_state.selected_description = technique_key
+
+# Check session state for selected description
+if "selected_description" in st.session_state:
+    selected_description = st.session_state.selected_description
+
+# Display Technique Description if selected
+if selected_description is not None:
+    st.markdown("---")
+    st.markdown(f"## 📖 {selected_description} Description")
+
+    description_content = load_description(selected_description)
+    st.markdown(description_content)
+
+    st.markdown("---")
+
+# 8. Main Logic - Determine which image to use
 if uploaded_file is not None:
-    # Save file temporarily
+    # User uploaded a file
     file_path = save_uploaded_file(uploaded_file)
+    image_name = uploaded_file.name
+    is_sample = False
+elif os.path.exists(DEFAULT_SAMPLE_IMAGE):
+    # Use default sample image
+    file_path = DEFAULT_SAMPLE_IMAGE
+    image_name = "Sample Image (Default)"
+    is_sample = True
+else:
+    # No image available
+    file_path = None
+    image_name = None
+    is_sample = False
+
+# Process the image if available
+if file_path is not None:
 
     # Display Original
     col1, col2 = st.columns([1, 2])
     with col1:
         st.image(file_path, caption="Original Image", width="stretch")
     with col2:
-        st.warning(f"Analyzing: {uploaded_file.name}")
+        if is_sample:
+            st.info(f"📸 Analyzing: {image_name}")
+            st.caption(
+                "This is a sample image loaded by default. Upload your own image in the sidebar to analyze it.")
+        else:
+            st.warning(f"Analyzing: {image_name}")
 
     # 5. Analysis Tabs
     tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12 = st.tabs(
@@ -448,118 +544,1167 @@ if uploaded_file is not None:
 
     # --- TAB 3: HISTOGRAM ---
     with tab3:
-        st.subheader("Histogram Analysis")
-        if st.button("Generate Histogram"):
-            with st.spinner("Processing..."):
-                hist_path = histogram_analysis.generate_histogram(file_path)
-                if hist_path:
-                    st.image(hist_path, caption="Histogram Analysis",
-                             width="stretch")
-                else:
-                    st.error("Failed to generate histogram.")
+        st.subheader("📊 Advanced Histogram Analysis")
+        st.write(
+            "RGB histogram analysis with statistical forensics to detect manipulation indicators "
+            "such as artificial gaps (comb patterns), clipping, and unusual distributions."
+        )
+
+        if st.button("🚀 Generate Histogram Analysis", type="primary"):
+            with st.spinner("Analyzing color distribution patterns..."):
+                try:
+                    result = histogram_analysis.generate_histogram(file_path)
+
+                    if result['status'] == 'success':
+                        # Display histogram image
+                        st.markdown("---")
+                        st.subheader("📈 RGB Histogram")
+                        st.image(
+                            result['histogram_path'], caption="Histogram Analysis", width='stretch')
+
+                        # Statistics summary cards
+                        st.markdown("---")
+                        st.subheader("📊 Statistical Summary")
+
+                        col1, col2, col3 = st.columns(3)
+
+                        with col1:
+                            st.markdown("**🔴 Red Channel**")
+                            red_stats = result['statistics']['red']
+                            st.metric("Mean", f"{red_stats['mean']:.2f}")
+                            st.metric("Std Dev", f"{red_stats['std']:.2f}")
+                            st.metric(
+                                "Range", f"{red_stats['min']:.0f} - {red_stats['max']:.0f}")
+                            st.metric("Median", f"{red_stats['median']:.2f}")
+
+                        with col2:
+                            st.markdown("**🟢 Green Channel**")
+                            green_stats = result['statistics']['green']
+                            st.metric("Mean", f"{green_stats['mean']:.2f}")
+                            st.metric("Std Dev", f"{green_stats['std']:.2f}")
+                            st.metric(
+                                "Range", f"{green_stats['min']:.0f} - {green_stats['max']:.0f}")
+                            st.metric("Median", f"{green_stats['median']:.2f}")
+
+                        with col3:
+                            st.markdown("**🔵 Blue Channel**")
+                            blue_stats = result['statistics']['blue']
+                            st.metric("Mean", f"{blue_stats['mean']:.2f}")
+                            st.metric("Std Dev", f"{blue_stats['std']:.2f}")
+                            st.metric(
+                                "Range", f"{blue_stats['min']:.0f} - {blue_stats['max']:.0f}")
+                            st.metric("Median", f"{blue_stats['median']:.2f}")
+
+                        # Warnings section
+                        if result['warnings']:
+                            st.markdown("---")
+                            st.subheader("⚠️ Detected Anomalies")
+                            for warning in result['warnings']:
+                                st.warning(f"⚠️ {warning}")
+                        else:
+                            st.markdown("---")
+                            st.success("✅ No histogram anomalies detected")
+
+                        # Interpretation
+                        st.markdown("---")
+                        st.subheader("💡 Interpretation")
+                        st.info(result['interpretation'])
+
+                        # Raw data expander
+                        with st.expander("📋 View Raw Statistics"):
+                            st.json(result['statistics'])
+
+                    else:
+                        st.error(
+                            f"❌ Analysis Error: {result.get('error', 'Unknown error')}")
+
+                except Exception as e:
+                    st.error(f"❌ Histogram Analysis Error: {str(e)}")
+                    with st.expander("🐛 View Error Details"):
+                        st.exception(e)
 
     # --- TAB 4: NOISE & GHOST ---
     with tab4:
-        st.subheader("Noise Map & JPEG Ghost")
-        col_noise, col_ghost = st.columns(2)
+        st.subheader("👻 Noise Analysis & JPEG Ghost Detection")
+        st.write(
+            "Detect tampering through noise inconsistencies and compression artifacts. "
+            "Authentic images have uniform noise patterns; manipulated regions show noise discrepancies."
+        )
 
-        with col_noise:
-            if st.button("Generate Noise Map"):
-                with st.spinner("Processing..."):
-                    noise_img = noise_map.generate_noise_map(file_path)
-                    if noise_img:
-                        st.image(noise_img, caption="Noise Map",
-                                 width="stretch")
+        # Noise Map Section
+        st.markdown("---")
+        st.markdown("### 🔬 Noise Map Analysis")
+        st.write(
+            "Extract and analyze high-frequency noise patterns to detect inconsistencies")
 
-        with col_ghost:
-            if st.button("Detect JPEG Ghost"):
-                with st.spinner("Processing..."):
-                    ghost_img = jpeg_ghost.detect_ghost(file_path)
-                    if ghost_img:
-                        st.image(ghost_img, caption="JPEG Ghost Detection",
-                                 width="stretch")
+        if st.button("🚀 Generate Noise Map", type="primary", key="noise_btn"):
+            with st.spinner("Extracting noise patterns..."):
+                try:
+                    result = noise_map.generate_noise_map(file_path)
+
+                    if result['status'] == 'success':
+                        # Display noise map
+                        st.image(
+                            result['noise_map_path'], caption="Noise Map (High-Frequency Components)", width='stretch')
+
+                        # Metrics display
+                        st.markdown("---")
+                        st.subheader("📊 Noise Metrics")
+
+                        col1, col2 = st.columns(2)
+
+                        with col1:
+                            st.markdown("**Channel Variance**")
+                            variance = result['metrics']['channel_noise_variance']
+                            st.metric("Red Channel", f"{variance['red']:.2f}")
+                            st.metric("Green Channel",
+                                      f"{variance['green']:.2f}")
+                            st.metric("Blue Channel",
+                                      f"{variance['blue']:.2f}")
+
+                        with col2:
+                            st.markdown("**Consistency Analysis**")
+                            st.metric(
+                                "Overall Variance", f"{result['metrics']['overall_variance']:.2f}")
+                            st.metric(
+                                "Block Variance Std", f"{result['metrics']['block_variance_std']:.2f}")
+                            st.metric("Blocks Analyzed",
+                                      result['metrics']['blocks_analyzed'])
+
+                        # Warnings
+                        if result['warnings']:
+                            st.markdown("---")
+                            st.subheader("⚠️ Detected Issues")
+                            for warning in result['warnings']:
+                                st.warning(f"⚠️ {warning}")
+                        else:
+                            st.success("✅ Noise pattern appears consistent")
+
+                        # Interpretation
+                        st.markdown("---")
+                        st.info(f"💡 {result['interpretation']}")
+
+                    else:
+                        st.error(
+                            f"❌ Error: {result.get('error', 'Unknown error')}")
+
+                except Exception as e:
+                    st.error(f"❌ Noise Analysis Error: {str(e)}")
+
+        # JPEG Ghost Section
+        st.markdown("---")
+        st.markdown("---")
+        st.markdown("### 👻 JPEG Ghost Detection")
+        st.write(
+            "Multi-quality compression analysis to estimate last save quality and detect re-editing")
+
+        if st.button("🚀 Detect JPEG Ghost", type="primary", key="ghost_btn"):
+            with st.spinner("Analyzing compression history..."):
+                try:
+                    result = jpeg_ghost.detect_jpeg_ghost(file_path)
+
+                    if result['status'] == 'success':
+                        # Display combined ghost visualization
+                        if result['combined_ghost_path']:
+                            st.image(
+                                result['combined_ghost_path'], caption="JPEG Ghost Analysis (Multiple Quality Levels)", width='stretch')
+
+                        # Quality estimation results
+                        st.markdown("---")
+                        st.subheader("📊 Quality Estimation")
+
+                        col1, col2, col3 = st.columns(3)
+
+                        with col1:
+                            st.metric("Estimated Last Save Quality",
+                                      f"{result['estimated_last_save_quality']}")
+
+                        with col2:
+                            confidence = result['quality_confidence']
+                            color = "🟢" if confidence == 'high' else "🟡"
+                            st.metric("Confidence",
+                                      f"{color} {confidence.upper()}")
+
+                        with col3:
+                            min_score = min(
+                                result['difference_scores'].values())
+                            st.metric("Min Difference Score",
+                                      f"{min_score:.2f}")
+
+                        # Difference scores by quality
+                        st.markdown("---")
+                        st.subheader("📈 Difference Scores by Quality")
+                        st.write(
+                            "Lower scores indicate quality closer to original compression")
+
+                        import pandas as pd
+                        df_scores = pd.DataFrame([
+                            {"Quality Level": q, "Difference Score": score}
+                            for q, score in sorted(result['difference_scores'].items())
+                        ])
+                        st.dataframe(df_scores, width='stretch')
+
+                        # Warnings
+                        if result['warnings']:
+                            st.markdown("---")
+                            st.subheader("⚠️ Detected Issues")
+                            for warning in result['warnings']:
+                                st.warning(f"⚠️ {warning}")
+                        else:
+                            st.success("✅ No compression anomalies detected")
+
+                        # Interpretation
+                        st.markdown("---")
+                        st.info(f"💡 {result['interpretation']}")
+
+                    else:
+                        st.error(
+                            f"❌ Error: {result.get('error', 'Unknown error')}")
+
+                except Exception as e:
+                    st.error(f"❌ JPEG Ghost Error: {str(e)}")
 
     # --- TAB 5: QUANTIZATION TABLE ---
     with tab5:
-        st.subheader("JPEG Quantization Table Analysis")
-        if st.button("Analyze Quantization Tables"):
-            with st.spinner("Processing..."):
-                result = quant_table.analyze_quantization_table(file_path)
-                st.json(result)
+        st.subheader("💾 JPEG Quantization Table Analysis")
+        st.write(
+            "Analyze JPEG quantization tables to identify compression software, "
+            "estimate quality settings, and detect non-standard table modifications."
+        )
+
+        if st.button("🚀 Analyze Quantization Tables", type="primary"):
+            with st.spinner("Extracting and analyzing Q-tables..."):
+                try:
+                    result = quant_table.analyze_quantization_table(file_path)
+
+                    if result['status'] == 'success':
+                        # Quality estimation
+                        st.markdown("---")
+                        st.subheader("📊 Quality Assessment")
+
+                        col1, col2, col3 = st.columns(3)
+
+                        with col1:
+                            quality = result.get(
+                                'estimated_quality', 'Unknown')
+                            st.metric("Estimated Quality", quality)
+
+                        with col2:
+                            tables_count = result.get('tables_found', 0)
+                            st.metric("Tables Found", tables_count)
+
+                        with col3:
+                            is_standard = result.get(
+                                'uses_standard_tables', 'Unknown')
+                            indicator = "✅" if is_standard else "⚠️"
+                            st.metric("Standard Tables",
+                                      f"{indicator} {is_standard}")
+
+                        # Table details
+                        if 'tables' in result:
+                            st.markdown("---")
+                            st.subheader("🔍 Quantization Table Details")
+
+                            for table_id, table_data in result['tables'].items():
+                                with st.expander(f"📋 Table {table_id}"):
+                                    # Display as 8x8 matrix
+                                    import numpy as np
+                                    table_array = np.array(
+                                        table_data).reshape(8, 8)
+
+                                    # Format as DataFrame for better display
+                                    import pandas as pd
+                                    df_table = pd.DataFrame(table_array)
+                                    st.dataframe(
+                                        df_table, width='stretch')
+
+                                    st.caption(
+                                        "Lower values = higher quality | Higher values = more compression")
+
+                        # Warnings
+                        if result.get('warnings'):
+                            st.markdown("---")
+                            st.subheader("⚠️ Detected Issues")
+                            for warning in result['warnings']:
+                                st.warning(f"⚠️ {warning}")
+                        else:
+                            st.success("✅ No Q-table anomalies detected")
+
+                        # Interpretation
+                        if result.get('interpretation'):
+                            st.markdown("---")
+                            st.info(f"💡 {result['interpretation']}")
+
+                        # Raw data
+                        with st.expander("📋 View Raw Analysis Data"):
+                            st.json(result)
+
+                    else:
+                        st.error(
+                            f"❌ Analysis Error: {result.get('error', 'Unknown error')}")
+
+                except Exception as e:
+                    st.error(f"❌ Q-Table Analysis Error: {str(e)}")
+                    with st.expander("🐛 View Error Details"):
+                        st.exception(e)
 
     # --- TAB 6: CMFD ---
     with tab6:
-        st.subheader("Copy-Move Forgery Detection")
-        if st.button("Run CMFD Analysis"):
-            with st.spinner("Processing..."):
-                result = cmfd.detect_copy_move(file_path)
-                if isinstance(result, dict) and 'result' in result:
-                    st.info(result['result'])
-                else:
-                    st.json(result)
+        st.subheader("🔄 Copy-Move Forgery Detection (CMFD)")
+        st.write(
+            "Detect duplicated regions within the image using DCT-based block matching. "
+            "This technique identifies areas that have been copied and pasted to conceal or clone content."
+        )
+
+        # Parameter controls
+        with st.expander("⚙️ Advanced Parameters"):
+            col_p1, col_p2 = st.columns(2)
+            with col_p1:
+                block_size = st.slider(
+                    "Block Size", 8, 32, 16, 4, help="Size of blocks for matching (larger = faster but less precise)")
+            with col_p2:
+                threshold = st.slider(
+                    "Similarity Threshold", 0.5, 0.99, 0.9, 0.05, help="Higher = stricter matching")
+
+        if st.button("🚀 Run CMFD Analysis", type="primary"):
+            with st.spinner("Analyzing for copy-move forgery... This may take a minute..."):
+                try:
+                    result = cmfd.detect_copy_move(
+                        file_path, block_size=block_size, threshold=threshold)
+
+                    if result['status'] == 'success':
+                        # Display result image
+                        st.markdown("---")
+                        st.subheader("🖼️ Detection Result")
+                        st.image(result['results']['result_image_path'],
+                                 caption="Copy-Move Detection (Green/Red: Matched regions | Lines: Connections)",
+                                 width='stretch')
+
+                        # Analysis metrics
+                        st.markdown("---")
+                        st.subheader("📊 Analysis Metrics")
+
+                        col1, col2, col3 = st.columns(3)
+
+                        with col1:
+                            st.metric(
+                                "Blocks Analyzed", f"{result['results']['total_blocks_analyzed']:,}")
+
+                        with col2:
+                            matches = result['results']['matches_found']
+                            color = "🔴" if matches > 20 else (
+                                "🟡" if matches > 5 else "🟢")
+                            st.metric("Matches Found", f"{color} {matches}")
+
+                        with col3:
+                            st.metric("Match Groups",
+                                      result['results']['match_groups'])
+
+                        # Parameters used
+                        st.markdown("---")
+                        st.subheader("⚙️ Parameters Used")
+                        col_param1, col_param2, col_param3 = st.columns(3)
+                        with col_param1:
+                            st.metric(
+                                "Block Size", f"{result['parameters']['block_size']}x{result['parameters']['block_size']}")
+                        with col_param2:
+                            st.metric(
+                                "Threshold", result['parameters']['threshold'])
+                        with col_param3:
+                            st.metric("Min Distance",
+                                      result['parameters']['min_distance'])
+
+                        # Match details
+                        if result.get('matches') and len(result['matches']) > 0:
+                            st.markdown("---")
+                            st.subheader("🔍 Top Matches")
+
+                            import pandas as pd
+                            match_data = []
+                            for i, match in enumerate(result['matches'][:10], 1):
+                                match_data.append({
+                                    "#": i,
+                                    "Block 1": f"({match['block1'][0]}, {match['block1'][1]})",
+                                    "Block 2": f"({match['block2'][0]}, {match['block2'][1]})",
+                                    "Similarity": f"{match['similarity']:.4f}"
+                                })
+
+                            df_matches = pd.DataFrame(match_data)
+                            st.dataframe(df_matches, width='stretch')
+
+                        # Warnings
+                        if result.get('warnings'):
+                            st.markdown("---")
+                            st.subheader("⚠️ Detected Issues")
+                            for warning in result['warnings']:
+                                st.warning(f"⚠️ {warning}")
+                        else:
+                            st.success("✅ No copy-move forgery detected")
+
+                        # Interpretation
+                        st.markdown("---")
+                        st.info(f"💡 {result['interpretation']}")
+
+                        # Raw data
+                        with st.expander("📋 View Raw Analysis Data"):
+                            st.json(result)
+
+                    else:
+                        st.error(
+                            f"❌ Analysis Error: {result.get('error', 'Unknown error')}")
+
+                except Exception as e:
+                    st.error(f"❌ CMFD Error: {str(e)}")
+                    with st.expander("🐛 View Error Details"):
+                        st.exception(e)
 
     # --- TAB 7: PRNU ---
     with tab7:
-        st.subheader("PRNU - Sensor Fingerprint Analysis")
-        if st.button("Analyze PRNU"):
-            with st.spinner("Processing..."):
-                result = prnu.analyze_prnu(file_path)
-                st.json(result)
+        st.subheader("📡 PRNU - Sensor Fingerprint Analysis")
+        st.write(
+            "Extract and analyze Photo Response Non-Uniformity (PRNU) patterns - "
+            "unique sensor fingerprints that can identify the camera or detect spliced regions."
+        )
+
+        # Optional reference image
+        st.markdown("### 📂 Optional: Reference Image")
+        st.write(
+            "Upload a reference image from the same camera for correlation analysis")
+        reference_file = st.file_uploader("Reference Image (Optional)", type=[
+                                          "jpg", "jpeg", "png"], key="prnu_ref")
+
+        reference_path = None
+        if reference_file:
+            reference_path = save_uploaded_file(reference_file)
+            st.success(f"✅ Reference image loaded: {reference_file.name}")
+
+        if st.button("🚀 Analyze PRNU", type="primary"):
+            with st.spinner("Extracting sensor fingerprint..."):
+                try:
+                    result = prnu.analyze_prnu(
+                        file_path, reference_image_path=reference_path)
+
+                    if result['status'] == 'success':
+                        # Display PRNU pattern if available
+                        if result.get('prnu_pattern_path'):
+                            st.markdown("---")
+                            st.subheader("🖼️ PRNU Pattern Visualization")
+                            st.image(result['prnu_pattern_path'],
+                                     caption="Sensor Noise Pattern (PRNU)",
+                                     width='stretch')
+
+                        # Pattern strength metrics
+                        st.markdown("---")
+                        st.subheader("📊 Pattern Strength Analysis")
+
+                        col1, col2, col3 = st.columns(3)
+
+                        with col1:
+                            strength = result['metrics'].get(
+                                'pattern_strength', 0)
+                            color = "🟢" if strength > 5 else (
+                                "🟡" if strength > 2 else "🔴")
+                            st.metric("Pattern Strength",
+                                      f"{color} {strength:.4f}")
+
+                        with col2:
+                            consistency = result['metrics'].get(
+                                'variance_consistency', 0)
+                            st.metric("Variance Consistency",
+                                      f"{consistency:.4f}")
+
+                        with col3:
+                            blocks = result['metrics'].get(
+                                'blocks_analyzed', 0)
+                            st.metric("Blocks Analyzed", blocks)
+
+                        # Correlation results (if reference provided)
+                        if result.get('correlation_analysis'):
+                            st.markdown("---")
+                            st.subheader("🔗 Reference Correlation Analysis")
+
+                            corr = result['correlation_analysis']
+                            col_corr1, col_corr2 = st.columns(2)
+
+                            with col_corr1:
+                                correlation = corr.get('correlation', 0)
+                                color = "🟢" if correlation > 0.7 else (
+                                    "🟡" if correlation > 0.4 else "🔴")
+                                st.metric("Correlation Coefficient",
+                                          f"{color} {correlation:.4f}")
+
+                            with col_corr2:
+                                likelihood = corr.get(
+                                    'same_camera_likelihood', 'Unknown')
+                                st.metric("Same Camera Likelihood", likelihood)
+
+                            st.info(
+                                "💡 High correlation (>0.7) suggests same camera source. "
+                                "Low correlation may indicate different camera or spliced regions."
+                            )
+
+                        # Warnings
+                        if result.get('warnings'):
+                            st.markdown("---")
+                            st.subheader("⚠️ Detected Issues")
+                            for warning in result['warnings']:
+                                st.warning(f"⚠️ {warning}")
+                        else:
+                            st.success("✅ PRNU pattern appears consistent")
+
+                        # Interpretation
+                        if result.get('interpretation'):
+                            st.markdown("---")
+                            st.info(f"💡 {result['interpretation']}")
+
+                        # Raw data
+                        with st.expander("📋 View Raw Analysis Data"):
+                            st.json(result)
+
+                    else:
+                        st.error(
+                            f"❌ Analysis Error: {result.get('error', 'Unknown error')}")
+
+                except Exception as e:
+                    st.error(f"❌ PRNU Analysis Error: {str(e)}")
+                    with st.expander("🐛 View Error Details"):
+                        st.exception(e)
 
     # --- TAB 8: FREQUENCY ANALYSIS ---
     with tab8:
-        st.subheader("Frequency Domain Analysis")
-        col_fft, col_dct = st.columns(2)
+        st.subheader("📈 Frequency Domain Analysis")
+        st.write(
+            "Analyze image in frequency domain using FFT and DCT transforms to detect "
+            "tampering artifacts, periodic patterns, and anomalies invisible in spatial domain."
+        )
 
-        with col_fft:
-            if st.button("FFT Analysis"):
-                with st.spinner("Processing..."):
+        # FFT Analysis Section
+        st.markdown("---")
+        st.markdown("### 🌊 FFT (Fast Fourier Transform) Analysis")
+        st.write(
+            "Analyzes the image's frequency patterns - like looking at the 'fingerprint' of how details are distributed. "
+            "Edited images often have unnatural frequency patterns."
+        )
+
+        if st.button("🚀 Run FFT Analysis", type="primary", key="fft_btn"):
+            with st.spinner("Computing FFT spectrum..."):
+                try:
                     result = frequency_analysis.analyze_frequency_domain(
                         file_path)
-                    st.json(result)
 
-        with col_dct:
-            if st.button("DCT Anomalies"):
-                with st.spinner("Processing..."):
+                    if result.get('status') == 'success':
+                        # Overall verdict
+                        st.markdown("---")
+                        st.subheader("🎯 Overall Assessment")
+
+                        col_verdict1, col_verdict2, col_verdict3 = st.columns(
+                            3)
+
+                        with col_verdict1:
+                            score = result['authenticity_score']
+                            if score >= 80:
+                                color = "🟢"
+                            elif score >= 60:
+                                color = "🟡"
+                            else:
+                                color = "🔴"
+                            st.metric("Authenticity Score",
+                                      f"{color} {score}/100")
+
+                        with col_verdict2:
+                            risk = result['risk_level']
+                            risk_color = "🟢" if risk == "Low" else (
+                                "🟡" if risk == "Medium" else "🔴")
+                            st.metric("Risk Level", f"{risk_color} {risk}")
+
+                        with col_verdict3:
+                            st.metric("Status", result['verdict'][:20] + "...")
+
+                        st.info(f"**Verdict:** {result['verdict']}")
+
+                        # Display spectrum visualization
+                        if result.get('magnitude_spectrum_path'):
+                            st.markdown("---")
+                            st.subheader("📊 Frequency Spectrum Visualization")
+                            st.image(result['magnitude_spectrum_path'],
+                                     caption="FFT Magnitude Spectrum - Shows how image details are distributed",
+                                     width='stretch')
+                            st.caption(
+                                "💡 **How to read this:** Bright spots in the center = smooth areas | Bright outer regions = sharp edges and details")
+
+                        # User-friendly metrics
+                        st.markdown("---")
+                        st.subheader("📈 What We Found")
+
+                        metrics = result['metrics']
+                        col_m1, col_m2, col_m3 = st.columns(3)
+
+                        with col_m1:
+                            detail_pct = metrics['high_frequency_energy_percentage']
+                            st.metric("Fine Details", f"{detail_pct:.1f}%")
+                            if detail_pct < 10:
+                                st.caption("🔵 Low (smooth image)")
+                            elif detail_pct < 30:
+                                st.caption("🟢 Normal range")
+                            else:
+                                st.caption("🟡 High (very sharp)")
+
+                        with col_m2:
+                            consistency = metrics['phase_consistency_score']
+                            st.metric("Pattern Consistency",
+                                      f"{consistency:.1f}/10")
+                            if consistency >= 8:
+                                st.caption("🟢 Highly consistent")
+                            elif consistency >= 6:
+                                st.caption("🟡 Moderately consistent")
+                            else:
+                                st.caption("🔴 Inconsistent patterns")
+
+                        with col_m3:
+                            uniformity = metrics['frequency_uniformity']
+                            st.metric("Distribution", f"{uniformity:.2f}")
+                            if uniformity < 2.0:
+                                st.caption("🟢 Natural spread")
+                            elif uniformity < 3.5:
+                                st.caption("🟡 Slightly irregular")
+                            else:
+                                st.caption("🔴 Unusual patterns")
+
+                        # Findings
+                        st.markdown("---")
+                        st.subheader("🔍 Detailed Findings")
+                        for finding in result['findings']:
+                            if "✓" in finding:
+                                st.success(finding)
+                            else:
+                                st.warning(finding)
+
+                        # Warnings
+                        if result.get('warnings'):
+                            st.markdown("---")
+                            st.subheader("⚠️ Potential Issues Detected")
+                            for warning in result['warnings']:
+                                st.warning(f"⚠️ {warning}")
+
+                        # Human-readable interpretation
+                        st.markdown("---")
+                        st.subheader("💡 What This Means")
+                        st.markdown(result['interpretation'])
+
+                        # Technical details (collapsible)
+                        with st.expander("🔬 Technical Details (Advanced)"):
+                            st.json(result['technical_details'])
+
+                    else:
+                        st.error(
+                            f"❌ Analysis failed: {result.get('error', 'Unknown error')}")
+
+                except Exception as e:
+                    st.error(f"❌ FFT Analysis Error: {str(e)}")
+                    with st.expander("🐛 View Error Details"):
+                        st.exception(e)
+
+        # DCT Analysis Section
+        st.markdown("---")
+        st.markdown("---")
+        st.markdown("### 🧩 DCT (Discrete Cosine Transform) Anomaly Detection")
+        st.write(
+            "Analyzes JPEG compression patterns. Since most photos are saved as JPEG, "
+            "editing leaves telltale signs in how the image is compressed."
+        )
+
+        if st.button("🚀 Detect DCT Anomalies", type="primary", key="dct_btn"):
+            with st.spinner("Analyzing DCT coefficients..."):
+                try:
                     result = frequency_analysis.detect_dct_anomalies(file_path)
-                    st.json(result)
+
+                    if result.get('status') == 'success':
+                        # Overall verdict
+                        st.markdown("---")
+                        st.subheader("🎯 Overall Assessment")
+
+                        col_verdict1, col_verdict2, col_verdict3 = st.columns(
+                            3)
+
+                        with col_verdict1:
+                            score = result['authenticity_score']
+                            if score >= 80:
+                                color = "🟢"
+                            elif score >= 60:
+                                color = "🟡"
+                            else:
+                                color = "🔴"
+                            st.metric("Authenticity Score",
+                                      f"{color} {score}/100")
+
+                        with col_verdict2:
+                            risk = result['risk_level']
+                            risk_color = "🟢" if risk == "Low" else (
+                                "🟡" if risk == "Medium" else "🔴")
+                            st.metric("Risk Level", f"{risk_color} {risk}")
+
+                        with col_verdict3:
+                            anomaly_count = len(result.get('anomalies', []))
+                            anomaly_color = "🟢" if anomaly_count == 0 else (
+                                "🟡" if anomaly_count <= 2 else "🔴")
+                            st.metric("Anomalies Found",
+                                      f"{anomaly_color} {anomaly_count}")
+
+                        st.info(f"**Verdict:** {result['verdict']}")
+
+                        # Display DCT visualization
+                        if result.get('dct_anomaly_map_path'):
+                            st.markdown("---")
+                            st.subheader("📊 DCT Analysis Visualization")
+                            st.image(result['dct_anomaly_map_path'],
+                                     caption="DCT Coefficient & Block Consistency Analysis",
+                                     width='stretch')
+                            st.caption(
+                                "💡 **Left:** DCT coefficients (smooth areas top-left, details bottom-right) | **Right:** Block consistency (green = consistent, red = inconsistent)")
+
+                        # User-friendly metrics
+                        st.markdown("---")
+                        st.subheader("📈 Content Breakdown")
+
+                        metrics = result['metrics']
+                        col_m1, col_m2, col_m3 = st.columns(3)
+
+                        with col_m1:
+                            smooth_pct = metrics['smooth_content_percentage']
+                            st.metric("Smooth Areas", f"{smooth_pct:.1f}%")
+                            if 40 < smooth_pct < 70:
+                                st.caption("🟢 Natural balance")
+                            elif smooth_pct > 80:
+                                st.caption("🟡 Very smooth")
+                            else:
+                                st.caption("🟡 Low smoothness")
+
+                        with col_m2:
+                            detail_pct = metrics['detail_content_percentage']
+                            st.metric("Textures & Details",
+                                      f"{detail_pct:.1f}%")
+                            st.caption("🔵 Natural textures")
+
+                        with col_m3:
+                            noise_pct = metrics['noise_edge_percentage']
+                            st.metric("Edges & Noise", f"{noise_pct:.1f}%")
+                            if noise_pct < 5:
+                                st.caption("🟢 Normal levels")
+                            elif noise_pct < 10:
+                                st.caption("🟡 Elevated")
+                            else:
+                                st.caption("🔴 Very high")
+
+                        # Compression quality indicators
+                        st.markdown("---")
+                        st.subheader("🎯 Compression Quality Indicators")
+
+                        col_q1, col_q2 = st.columns(2)
+
+                        with col_q1:
+                            block_score = metrics['block_consistency_score']
+                            st.metric("Block Consistency",
+                                      f"{block_score:.1f}/10")
+                            if block_score >= 8:
+                                st.caption("🟢 Highly consistent")
+                            elif block_score >= 5:
+                                st.caption("🟡 Some variations")
+                            else:
+                                st.caption("🔴 Inconsistent blocks")
+
+                        with col_q2:
+                            comp_quality = metrics['compression_quality_indicator']
+                            st.metric("Compression Quality",
+                                      f"{comp_quality:.1f}/10")
+                            if comp_quality >= 7:
+                                st.caption("🟢 Clean compression")
+                            elif comp_quality >= 4:
+                                st.caption("🟡 Some artifacts")
+                            else:
+                                st.caption("🔴 Heavy compression")
+
+                        # Findings
+                        st.markdown("---")
+                        st.subheader("🔍 Detailed Findings")
+                        for finding in result['findings']:
+                            if "✓" in finding:
+                                st.success(finding)
+                            else:
+                                st.warning(finding)
+
+                        # Specific anomalies
+                        if result.get('anomalies'):
+                            st.markdown("---")
+                            st.subheader("🚨 Specific Anomalies Detected")
+                            for anomaly in result['anomalies']:
+                                st.error(f"🔴 {anomaly}")
+
+                        # Warnings
+                        if result.get('warnings'):
+                            st.markdown("---")
+                            st.subheader("⚠️ Warnings & Explanations")
+                            for warning in result['warnings']:
+                                st.warning(f"⚠️ {warning}")
+                        else:
+                            st.success(
+                                "✅ No significant compression anomalies detected")
+
+                        # Human-readable interpretation
+                        st.markdown("---")
+                        st.subheader("💡 What This Means")
+                        st.markdown(result['interpretation'])
+
+                        # Technical details (collapsible)
+                        with st.expander("🔬 Technical Details (Advanced)"):
+                            st.json(result['technical_details'])
+
+                    else:
+                        st.error(
+                            f"❌ Analysis failed: {result.get('error', 'Unknown error')}")
+
+                except Exception as e:
+                    st.error(f"❌ DCT Analysis Error: {str(e)}")
+                    with st.expander("🐛 View Error Details"):
+                        st.exception(e)
+                    st.error(f"❌ DCT Analysis Error: {str(e)}")
 
     # --- TAB 9: DEEPFAKE DETECTION ---
     with tab9:
-        st.subheader("Deepfake & GAN Detection")
-        col_artifacts, col_gan = st.columns(2)
+        st.subheader(" Deepfake & GAN Detection")
+        st.write(
+            "Detect AI-generated and deepfake images using spectral analysis and GAN fingerprint detection. "
+            "GANs leave characteristic frequency-domain patterns that can be detected."
+        )
 
-        with col_artifacts:
-            if st.button("Detect GAN Artifacts"):
-                with st.spinner("Processing..."):
+        # GAN Artifacts Section
+        st.markdown("---")
+        st.markdown("### 🎭 General Deepfake Artifact Detection")
+        st.write("Analyze for common deepfake indicators and manipulation artifacts")
+
+        if st.button("🚀 Detect Deepfake Artifacts", type="primary", key="artifacts_btn"):
+            with st.spinner("Analyzing for deepfake artifacts..."):
+                try:
                     result = deepfake_detector.detect_deepfake_artifacts(
                         file_path)
-                    st.json(result)
 
-        with col_gan:
-            if st.button("Detect GAN Fingerprint"):
-                with st.spinner("Processing..."):
+                    if result.get('status') == 'success':
+                        # Display metrics
+                        st.markdown("---")
+                        st.subheader("📊 Artifact Analysis")
+
+                        if result.get('metrics'):
+                            metrics = result['metrics']
+                            col_a1, col_a2, col_a3 = st.columns(3)
+
+                            with col_a1:
+                                if 'face_consistency' in metrics:
+                                    st.metric(
+                                        "Face Consistency", f"{metrics['face_consistency']:.2f}")
+
+                            with col_a2:
+                                if 'edge_sharpness' in metrics:
+                                    st.metric("Edge Sharpness",
+                                              f"{metrics['edge_sharpness']:.2f}")
+
+                            with col_a3:
+                                if 'color_anomalies' in metrics:
+                                    st.metric("Color Anomalies",
+                                              metrics['color_anomalies'])
+
+                        # Warnings
+                        if result.get('warnings'):
+                            st.markdown("---")
+                            for warning in result['warnings']:
+                                st.warning(f"⚠️ {warning}")
+
+                        # Interpretation
+                        if result.get('interpretation'):
+                            st.info(f"💡 {result['interpretation']}")
+
+                    else:
+                        st.json(result)
+
+                except Exception as e:
+                    st.error(f"❌ Artifact Detection Error: {str(e)}")
+
+        # GAN Fingerprint Section
+        st.markdown("---")
+        st.markdown("---")
+        st.markdown("### 🧠 GAN Fingerprint Detection")
+        st.write(
+            "Advanced spectral analysis to detect GAN-specific frequency signatures")
+
+        if st.button("🚀 Detect GAN Fingerprint", type="primary", key="gan_btn"):
+            with st.spinner("Analyzing GAN fingerprint patterns..."):
+                try:
                     result = deepfake_detector.detect_gan_fingerprint(
                         file_path)
-                    st.json(result)
+
+                    if result.get('status') == 'success':
+                        # GAN Score Display
+                        st.markdown("---")
+                        st.subheader("🎯 GAN Detection Score")
+
+                        col_score1, col_score2, col_score3 = st.columns(3)
+
+                        with col_score1:
+                            gan_score = result['metrics'].get('gan_score', 0)
+
+                            # Color-coded based on score
+                            if gan_score > 0.7:
+                                color = "🔴"
+                                assessment = "HIGH RISK"
+                            elif gan_score > 0.4:
+                                color = "🟡"
+                                assessment = "MEDIUM RISK"
+                            else:
+                                color = "🟢"
+                                assessment = "LOW RISK"
+
+                            st.metric("GAN Score", f"{color} {gan_score:.3f}")
+                            st.caption(assessment)
+
+                        with col_score2:
+                            likelihood = result.get(
+                                'gan_likelihood', 'Unknown')
+                            st.metric("GAN Likelihood", likelihood)
+
+                        with col_score3:
+                            indicators = result.get('gan_indicators', [])
+                            st.metric("Indicators Detected", len(indicators))
+
+                        # Detailed Metrics
+                        st.markdown("---")
+                        st.subheader("📈 Spectral Analysis Metrics")
+
+                        metrics = result['metrics']
+                        col_m1, col_m2, col_m3 = st.columns(3)
+
+                        with col_m1:
+                            if 'radial_frequency_variance' in metrics:
+                                st.metric(
+                                    "Radial Frequency Variance", f"{metrics['radial_frequency_variance']:.2f}")
+
+                        with col_m2:
+                            if 'spectral_peaks_detected' in metrics:
+                                st.metric("Spectral Peaks",
+                                          metrics['spectral_peaks_detected'])
+
+                        with col_m3:
+                            if 'quadrant_symmetry' in metrics:
+                                st.metric("Quadrant Symmetry",
+                                          f"{metrics['quadrant_symmetry']:.4f}")
+
+                        # Radial Profile Visualization
+                        if result.get('radial_profile'):
+                            st.markdown("---")
+                            st.subheader("🌊 Radial Frequency Profile")
+
+                            import matplotlib.pyplot as plt
+                            import numpy as np
+
+                            fig, ax = plt.subplots(figsize=(10, 4))
+                            profile = result['radial_profile']
+                            ax.plot(profile, linewidth=2, color='#1f77b4')
+                            ax.set_xlabel(
+                                'Radial Distance from Center', fontsize=11)
+                            ax.set_ylabel('Average Magnitude', fontsize=11)
+                            ax.set_title('Radial Frequency Distribution',
+                                         fontsize=13, fontweight='bold')
+                            ax.grid(alpha=0.3, linestyle='--')
+                            plt.tight_layout()
+                            st.pyplot(fig)
+                            plt.close()
+
+                            st.caption(
+                                "💡 GANs produce characteristic periodic patterns in radial frequency distribution")
+
+                        # GAN Indicators
+                        if result.get('gan_indicators'):
+                            st.markdown("---")
+                            st.subheader("🚩 GAN Indicators Detected")
+                            for indicator in result['gan_indicators']:
+                                st.warning(f"⚠️ {indicator}")
+                        else:
+                            st.success("✅ No strong GAN indicators detected")
+
+                        # Interpretation
+                        if result.get('interpretation'):
+                            st.markdown("---")
+                            st.info(f"💡 {result['interpretation']}")
+
+                        # Raw data
+                        with st.expander("📋 View Raw Analysis Data"):
+                            st.json(result)
+
+                    else:
+                        st.error(
+                            f"❌ Analysis Error: {result.get('error', 'Unknown error')}")
+
+                except Exception as e:
+                    st.error(f"❌ GAN Detection Error: {str(e)}")
+                    with st.expander("🐛 View Error Details"):
+                        st.exception(e)
 
     # --- TAB 10: RESAMPLING DETECTION ---
     with tab10:
-        st.subheader("Resampling & Interpolation Detection")
-        col_resample, col_interp = st.columns(2)
+        st.subheader("🔀 Resampling & Interpolation Detection")
+        st.write(
+            "Detect image resizing and resampling artifacts that indicate manipulation. "
+            "Resampling leaves periodic patterns that can be detected through frequency analysis."
+        )
 
-        with col_resample:
-            if st.button("Detect Resampling"):
-                with st.spinner("Processing..."):
+        # Resampling Detection Section
+        st.markdown("---")
+        st.markdown("### 🔍 Resampling Detection")
+        st.write("Analyze for periodic patterns indicating image has been resized")
+
+        if st.button("🚀 Detect Resampling", type="primary", key="resample_btn"):
+            with st.spinner("Analyzing for resampling artifacts..."):
+                try:
                     result = resampling_detector.detect_resampling(file_path)
-                    st.json(result)
 
-        with col_interp:
-            if st.button("Identify Interpolation Method"):
-                with st.spinner("Processing..."):
+                    if result.get('status') == 'success':
+                        # Resampling Detection Result
+                        st.markdown("---")
+                        st.subheader("🎯 Detection Result")
+
+                        col_r1, col_r2, col_r3 = st.columns(3)
+
+                        with col_r1:
+                            detected = result.get('resampled', False)
+                            indicator = "🔴" if detected else "🟢"
+                            status = "DETECTED" if detected else "NOT DETECTED"
+                            st.metric("Resampling", f"{indicator} {status}")
+
+                        with col_r2:
+                            if 'confidence' in result:
+                                confidence = result['confidence']
+                                st.metric("Confidence", f"{confidence:.2%}")
+
+                        with col_r3:
+                            if 'periodicity_score' in result.get('metrics', {}):
+                                score = result['metrics']['periodicity_score']
+                                st.metric("Periodicity Score", f"{score:.3f}")
+
+                        # Detailed Metrics
+                        if result.get('metrics'):
+                            st.markdown("---")
+                            st.subheader("📊 Analysis Metrics")
+
+                            metrics = result['metrics']
+                            col_m1, col_m2 = st.columns(2)
+
+                            with col_m1:
+                                if 'peak_count' in metrics:
+                                    st.metric("Detected Peaks",
+                                              metrics['peak_count'])
+                                if 'variance_ratio' in metrics:
+                                    st.metric("Variance Ratio",
+                                              f"{metrics['variance_ratio']:.3f}")
+
+                            with col_m2:
+                                if 'estimated_scale_factor' in metrics:
+                                    st.metric(
+                                        "Est. Scale Factor", f"{metrics['estimated_scale_factor']:.2f}")
+                                if 'direction' in metrics:
+                                    st.metric(
+                                        "Direction", metrics['direction'])
+
+                        # Visualization if available
+                        if result.get('periodicity_map_path'):
+                            st.markdown("---")
+                            st.subheader("🖼️ Periodicity Map")
+                            st.image(result['periodicity_map_path'],
+                                     caption="Resampling Artifact Visualization",
+                                     width='stretch')
+
+                        # Warnings
+                        if result.get('warnings'):
+                            st.markdown("---")
+                            for warning in result['warnings']:
+                                st.warning(f"⚠️ {warning}")
+                        else:
+                            st.success("✅ No resampling artifacts detected")
+
+                        # Interpretation
+                        if result.get('interpretation'):
+                            st.info(f"💡 {result['interpretation']}")
+
+                    else:
+                        st.json(result)
+
+                except Exception as e:
+                    st.error(f"❌ Resampling Detection Error: {str(e)}")
+
+        # Interpolation Method Detection
+        st.markdown("---")
+        st.markdown("---")
+        st.markdown("### 🧩 Interpolation Method Identification")
+        st.write("Identify the interpolation algorithm used during resampling")
+
+        if st.button("🚀 Identify Interpolation Method", type="primary", key="interp_btn"):
+            with st.spinner("Analyzing interpolation patterns..."):
+                try:
                     result = resampling_detector.detect_interpolation_method(
                         file_path)
-                    st.json(result)
+
+                    if result.get('status') == 'success':
+                        # Method Identification
+                        st.markdown("---")
+                        st.subheader("🎯 Identified Method")
+
+                        col_i1, col_i2 = st.columns(2)
+
+                        with col_i1:
+                            method = result.get('method', 'Unknown')
+                            st.metric("Interpolation Method", method)
+
+                        with col_i2:
+                            if 'confidence' in result:
+                                confidence = result['confidence']
+                                color = "🟢" if confidence > 0.7 else (
+                                    "🟡" if confidence > 0.4 else "🔴")
+                                st.metric("Confidence",
+                                          f"{color} {confidence:.2%}")
+
+                        # Classification scores
+                        if result.get('method_scores'):
+                            st.markdown("---")
+                            st.subheader("📈 Method Classification Scores")
+
+                            import pandas as pd
+                            scores_df = pd.DataFrame([
+                                {"Method": method, "Score": f"{score:.4f}"}
+                                for method, score in result['method_scores'].items()
+                            ]).sort_values(by="Score", ascending=False)
+
+                            # Characteristics
+                            st.dataframe(scores_df, width='stretch')
+                        if result.get('characteristics'):
+                            st.markdown("---")
+                            st.subheader("🔍 Detected Characteristics")
+                            for char in result['characteristics']:
+                                st.info(f"• {char}")
+
+                        # Warnings
+                        if result.get('warnings'):
+                            st.markdown("---")
+                            for warning in result['warnings']:
+                                st.warning(f"⚠️ {warning}")
+
+                        # Interpretation
+                        if result.get('interpretation'):
+                            st.markdown("---")
+                            st.info(f"💡 {result['interpretation']}")
+
+                    else:
+                        st.json(result)
+
+                except Exception as e:
+                    st.error(f"❌ Interpolation Detection Error: {str(e)}")
+                    with st.expander("🐛 View Error Details"):
+                        st.exception(e)
 
     # --- TAB 11: INFO ---
     with tab11:

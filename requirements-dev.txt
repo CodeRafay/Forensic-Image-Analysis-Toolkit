@@ -1,0 +1,34 @@
+# Development Dependencies
+# Install with: pip install -r requirements-dev.txt
+
+# Testing frameworks
+pytest==7.4.3
+pytest-cov==4.1.0
+pytest-xdist==3.5.0  # Parallel test execution
+pytest-timeout==2.2.0  # Test timeout support
+pytest-mock==3.12.0  # Mocking support
+
+# Code quality
+black==23.12.1  # Code formatter
+flake8==6.1.0  # Linter
+isort==5.13.2  # Import sorter
+mypy==1.7.1  # Static type checker
+pylint==3.0.3  # Advanced linter
+
+# Documentation
+sphinx==7.2.6  # Documentation generator
+sphinx-rtd-theme==2.0.0  # Read the Docs theme
+myst-parser==2.0.0  # Markdown support for Sphinx
+
+# Development tools
+ipython==8.18.1  # Enhanced Python shell
+jupyter==1.0.0  # Jupyter notebooks
+pre-commit==3.6.0  # Git hooks for code quality
+
+# Performance profiling
+memory-profiler==0.61.0  # Memory usage profiling
+line-profiler==4.1.1  # Line-by-line profiling
+
+# Security
+bandit==1.7.5  # Security issue scanner
+safety==2.3.5  # Dependency vulnerability checker

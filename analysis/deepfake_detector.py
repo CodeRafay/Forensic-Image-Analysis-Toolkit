@@ -81,12 +81,13 @@ def detect_deepfake_artifacts(image_path):
 def detect_gan_fingerprint(image_path):
     """
     Detects specific fingerprints left by popular GAN architectures (StyleGAN, ProGAN, etc).
+    GANs leave characteristic patterns in the frequency domain.
 
     Args:
         image_path (str): Path to image file
 
     Returns:
-        dict: GAN fingerprint detection results
+        dict: GAN fingerprint detection results with radial frequency analysis
     """
     try:
         img = Image.open(image_path).convert('RGB')
@@ -99,31 +100,109 @@ def detect_gan_fingerprint(image_path):
         fft_result = fft2(gray)
         magnitude = np.abs(fftshift(fft_result))
 
+        # Apply log scale for better visualization
+        magnitude_log = np.log(magnitude + 1)
+
         # Look for characteristic "blob" patterns in frequency domain
         h, w = magnitude.shape
         center_h, center_w = h // 2, w // 2
 
-        # Radial frequency analysis
+        # Radial frequency analysis (GANs produce specific radial patterns)
         y, x = np.ogrid[:h, :w]
         distance = np.sqrt((y - center_h)**2 + (x - center_w)**2)
 
+        # Sample radial profile at different frequencies
+        max_radius = min(center_h, center_w)
+        radial_bins = 50
         radial_profile = []
-        for r in range(1, min(center_h, center_w), 10):
-            mask = (distance >= r) & (distance < r + 10)
-            radial_profile.append(np.mean(magnitude[mask]))
+        radial_profile_normalized = []
 
-        # GANs produce characteristic radial patterns
-        radial_variance = np.var(radial_profile)
+        for i in range(radial_bins):
+            r_inner = int(i * max_radius / radial_bins)
+            r_outer = int((i + 1) * max_radius / radial_bins)
+
+            mask = (distance >= r_inner) & (distance < r_outer)
+            if np.any(mask):
+                avg_magnitude = np.mean(magnitude_log[mask])
+                radial_profile.append(float(avg_magnitude))
+
+        # Normalize radial profile
+        if radial_profile:
+            profile_array = np.array(radial_profile)
+            profile_normalized = (
+                profile_array - np.mean(profile_array)) / (np.std(profile_array) + 1e-10)
+            radial_profile_normalized = profile_normalized.tolist()
+
+        # Analyze characteristics
+        radial_variance = float(np.var(radial_profile)
+                                ) if radial_profile else 0
+
+        # Look for periodic peaks (characteristic of GANs)
+        peak_count = 0
+        if len(radial_profile) > 3:
+            for i in range(1, len(radial_profile) - 1):
+                if radial_profile[i] > radial_profile[i-1] and radial_profile[i] > radial_profile[i+1]:
+                    if radial_profile[i] > np.mean(radial_profile) + np.std(radial_profile):
+                        peak_count += 1
+
+        # GAN likelihood assessment
+        gan_score = 0
+        gan_indicators = []
+
+        if radial_variance > 1.5:
+            gan_score += 0.3
+            gan_indicators.append("High radial frequency variance")
+
+        if peak_count > 5:
+            gan_score += 0.4
+            gan_indicators.append(
+                f"Multiple spectral peaks detected ({peak_count})")
+
+        # Check for symmetric artifacts
+        quadrant_means = []
+        quad_h, quad_w = h // 2, w // 2
+        quadrant_means.append(np.mean(magnitude[:quad_h, :quad_w]))
+        quadrant_means.append(np.mean(magnitude[:quad_h, quad_w:]))
+        quadrant_means.append(np.mean(magnitude[quad_h:, :quad_w]))
+        quadrant_means.append(np.mean(magnitude[quad_h:, quad_w:]))
+
+        quadrant_symmetry = float(
+            np.std(quadrant_means) / (np.mean(quadrant_means) + 1e-10))
+
+        if quadrant_symmetry < 0.1:
+            gan_score += 0.3
+            gan_indicators.append(
+                "Highly symmetric frequency distribution (GAN characteristic)")
+
+        # Determine likelihood
+        if gan_score > 0.7:
+            likelihood = "High"
+        elif gan_score > 0.4:
+            likelihood = "Medium"
+        else:
+            likelihood = "Low"
 
         result = {
-            "status": "analysis_complete",
+            "status": "success",
             "method": "GAN Fingerprint Detection (Spectral Analysis)",
-            "radial_frequency_variance": float(radial_variance),
-            "potential_gan_likelihood": "Medium" if radial_variance > 1000 else "Low",
-            "note": "Requires deep learning model for accurate detection; this is pattern-based heuristic"
+            "metrics": {
+                "radial_frequency_variance": radial_variance,
+                "spectral_peaks_detected": peak_count,
+                "quadrant_symmetry": quadrant_symmetry,
+                "gan_score": float(gan_score)
+            },
+            # First 20 values for reference
+            "radial_profile": radial_profile[:20],
+            "gan_indicators": gan_indicators,
+            "gan_likelihood": likelihood,
+            "interpretation": f"{likelihood} likelihood of GAN generation. Score: {gan_score:.2f}",
+            "note": "This is a heuristic detector; professional detection requires deep learning models"
         }
 
         return result
 
     except Exception as e:
-        return {"error": str(e), "status": "analysis_failed"}
+        return {
+            "status": "error",
+            "error": str(e)
+        }

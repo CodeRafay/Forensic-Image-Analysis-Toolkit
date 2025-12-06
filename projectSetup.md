@@ -148,7 +148,7 @@ if uploaded_file is not None:
     # Display Original
     col1, col2 = st.columns([1, 2])
     with col1:
-        st.image(file_path, caption="Original Image", use_container_width=True)
+        st.image(file_path, caption="Original Image", width='stretch')
     with col2:
         st.warning(f"Analyzing: {uploaded_file.name}")
 
@@ -164,7 +164,7 @@ if uploaded_file is not None:
         if st.button("Run ELA Analysis"):
             with st.spinner("Processing..."):
                 ela_img = ela.perform_ela(file_path, quality)
-                st.image(ela_img, caption="ELA Result", use_container_width=True)
+                st.image(ela_img, caption="ELA Result", width='stretch')
 
     # --- TAB 2: METADATA ---
     with tab2:
