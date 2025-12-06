@@ -23,9 +23,12 @@
 
 ### Additional Features
 
+- **Technique Descriptions** - Built-in educational guides for each analysis method
+- **Default Sample Image** - Preloaded image for instant testing without upload
 - **Web-based Interface** - No installation required, runs in browser
 - **Dark Theme** - Professional forensic UI with neon accents
 - **12 Analysis Tabs** - Organized, intuitive workflow
+- **Human-Readable Results** - Authenticity scoring (0-100) and risk levels
 - **Real-time Processing** - Instant visual feedback
 - **Cloud Deployment Ready** - Deploy to Streamlit Cloud in minutes
 
@@ -76,8 +79,16 @@ The application will automatically open in your default browser at `http://local
 VeritasForensics/
 ├── app.py                          # Main Streamlit application
 ├── requirements.txt                # Python dependencies
+├── requirements-dev.txt            # Development dependencies
 ├── projectSetup.md                 # Detailed setup guide
 ├── README.md                       # This file
+├── CHANGELOG.md                    # Version history
+├── CONTRIBUTING.md                 # Contribution guidelines
+├── LICENSE                         # BSD 3-Clause License
+├── pytest.ini                      # Test configuration
+├── .gitignore                      # Git ignore rules
+├── .pre-commit-config.yaml         # Pre-commit hooks
+├── TECHNIQUE_DESCRIPTIONS_USER_GUIDE.md  # User guide for descriptions
 │
 ├── analysis/                       # Forensic analysis modules
 │   ├── __init__.py
@@ -94,9 +105,34 @@ VeritasForensics/
 │   ├── resampling_detector.py      # Resampling detection
 │   └── util.py                     # Helper functions
 │
+├── Descriptions/                   # Technique education module (NEW)
+│   ├── ELA.md                      # ELA guide
+│   ├── Metadata.md                 # Metadata guide
+│   ├── Histogram.md                # Histogram guide
+│   ├── Noise_Ghost.md              # Noise/Ghost guide
+│   ├── Quantization.md             # Quantization guide
+│   ├── CMFD.md                     # CMFD guide
+│   ├── PRNU.md                     # PRNU guide
+│   ├── Frequency.md                # FFT/DCT guide
+│   ├── Deepfake.md                 # Deepfake guide
+│   └── Resampling.md               # Resampling guide
+│
+├── docs/                           # Documentation
+│   ├── API.md                      # API documentation
+│   ├── DEPLOYMENT.md               # Deployment guide
+│   ├── PROJECT_SUMMARY.md          # Project overview
+│   └── TECHNIQUES.md               # Techniques reference
+│
+├── tests/                          # Unit tests
+│   ├── __init__.py
+│   ├── test_ela.py                 # ELA tests
+│   ├── test_metadata.py            # Metadata tests
+│   └── test_integration.py         # Integration tests
+│
 ├── assets/                         # Static files
 │   ├── style.css                   # Custom CSS
-│   └── sample_images/              # Test images
+│   └── sample images/              # Sample test images
+│       └── sampleImg.jpeg          # Default sample image
 │
 ├── .streamlit/                     # Streamlit config
 │   └── config.toml                 # Theme & server settings
@@ -109,11 +145,23 @@ VeritasForensics/
 
 ### Basic Workflow
 
-1. **Upload Image**: Click "Choose an Image" in the sidebar
-2. **Select Technique**: Navigate to the analysis tab you want to use
-3. **Configure Parameters**: Adjust sliders/options as needed
-4. **Run Analysis**: Click the analysis button
-5. **Review Results**: View visualizations and metrics
+1. **View Sample Image**: App loads with default sample image automatically
+2. **Upload Your Image** (Optional): Click "Choose an Image" in sidebar to analyze your own
+3. **Learn About Techniques**: Click technique description buttons in sidebar for guidance
+4. **Select Analysis Tab**: Navigate to the technique you want to use
+5. **Configure Parameters**: Adjust sliders/options as needed
+6. **Run Analysis**: Click the analysis button
+7. **Review Results**: View visualizations, authenticity scores, and interpretations
+
+### Technique Descriptions (NEW)
+
+Access built-in educational guides via sidebar buttons:
+
+- **📚 Technique Descriptions Section** - Click any technique to learn
+- **Non-technical explanations** - Understand what each tool does
+- **Interpretation guides** - Learn to read results (normal vs. suspicious)
+- **Real-world examples** - See practical use cases
+- **Limitations explained** - Understand reliability and caveats
 
 ### Analysis Techniques Explained
 
