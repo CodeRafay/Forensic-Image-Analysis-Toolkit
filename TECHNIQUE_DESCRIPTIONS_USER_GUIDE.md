@@ -17,6 +17,7 @@ The "Technique Descriptions" section is located in the **left sidebar** below th
 [💾 Quantization]  [🔄 CMFD]
 [📡 PRNU]  [📈 Frequency]
 [😁 Deepfake]  [🔀 Resampling]
+[🔐 Steganography]  [🔑 Hash Verify]
 ```
 
 ## 🔍 Available Techniques
@@ -80,6 +81,18 @@ The "Technique Descriptions" section is located in the **left sidebar** below th
 - **What it shows**: Image scaling and interpolation patterns
 - **Analogy**: Like tree rings showing growth history
 - **File size**: 8.8 KB | **Content**: Scaling factor detection
+
+### 11. 🔐 **Steganography Detection**
+
+- **What it shows**: Hidden data in Least Significant Bits (LSB)
+- **Analogy**: Like invisible ink detection using special tests
+- **File size**: 6.1 KB | **Content**: Statistical analysis guide
+
+### 12. 🔑 **Hash Verification**
+
+- **What it shows**: Cryptographic provenance and authenticity
+- **Analogy**: Like DNA testing for digital files
+- **File size**: 10.0 KB | **Content**: Blockchain tracking guide
 
 ## 📖 What Each Description Contains
 
@@ -179,15 +192,15 @@ The "Technique Descriptions" section is located in the **left sidebar** below th
 
 | Metric                     | Value                         |
 | -------------------------- | ----------------------------- |
-| **Total Techniques**       | 10                            |
-| **Total Content**          | ~75 KB                        |
-| **Total Lines**            | ~1,500+                       |
-| **Average per Technique**  | ~7.5 KB, 150 lines            |
+| **Total Techniques**       | 12                            |
+| **Total Content**          | ~91 KB                        |
+| **Total Lines**            | ~1,800+                       |
+| **Average per Technique**  | ~7.6 KB, 150 lines            |
 | **Shortest Description**   | ELA (4 KB, 109 lines)         |
-| **Longest Description**    | Deepfake (9.6 KB, 200+ lines) |
+| **Longest Description**    | Hash Verification (10 KB)     |
 | **Non-technical Language** | 100% (no jargon)              |
-| **Real-world Examples**    | 30+ included                  |
-| **Visual Analogies**       | 10 (one per technique)        |
+| **Real-world Examples**    | 35+ included                  |
+| **Visual Analogies**       | 12 (one per technique)        |
 
 ## 🔧 Technical Details
 

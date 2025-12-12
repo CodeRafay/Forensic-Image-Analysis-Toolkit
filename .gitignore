@@ -35,3 +35,13 @@ temp/
 
 # Logs
 *.log
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+tests/test_images/
+
+# Hash verification database (temporary)
+temp/hash_database.json
+hash_database_export_*.json

@@ -8,5 +8,6 @@ pandas
 plotly
 Pillow 
 scipy
+imagehash
 
 
