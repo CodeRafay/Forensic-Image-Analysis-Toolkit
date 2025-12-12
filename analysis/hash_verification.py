@@ -20,8 +20,10 @@ from datetime import datetime
 from pathlib import Path
 
 
-# Default database location
-DEFAULT_DB_PATH = os.path.join("temp", "hash_database.json")
+# Default database location - ensure temp directory exists
+_TEMP_DIR = "temp"
+os.makedirs(_TEMP_DIR, exist_ok=True)
+DEFAULT_DB_PATH = os.path.join(_TEMP_DIR, "hash_database.json")
 
 
 def generate_perceptual_hash(image_path):

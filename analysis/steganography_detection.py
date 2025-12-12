@@ -10,9 +10,9 @@ indicate hidden data embedded in image LSB planes.
 from PIL import Image
 import numpy as np
 from scipy import stats
-import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend
+import matplotlib.pyplot as plt
 import io
 
 
