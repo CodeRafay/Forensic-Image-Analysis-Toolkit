@@ -3,7 +3,7 @@
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![Streamlit](https://img.shields.io/badge/streamlit-1.28+-red.svg)](https://streamlit.io)
 
-**Veritas** is a comprehensive web-based digital forensics tool for detecting image forgeries and manipulations using 11 advanced analysis techniques.
+**Veritas** is a comprehensive web-based digital forensics tool for detecting image forgeries and manipulations using 13 advanced analysis techniques.
 
 ## 🎯 Features
 
@@ -20,6 +20,16 @@
 9. **Frequency Domain Analysis** - FFT/DCT-based tampering detection
 10. **Deepfake Detection** - GAN artifact classification
 11. **Resampling Detection** - Image resizing and interpolation artifacts
+12. **Steganography Detection** - LSB statistical analysis for hidden data detection
+13. **Hash Verification** - Cryptographic provenance tracking and authentication
+
+### Information Security Features
+
+- **🔐 LSB Steganography Detection** - Chi-square testing for hidden data in Least Significant Bits
+- **🔑 Blockchain-Based Provenance** - Cryptographic and perceptual hash verification
+- **⚖️ Legal Chain of Custody** - Track image modifications with timestamps
+- **🔒 SHA-256 Integrity** - Exact file matching for evidence verification
+- **👁️ Perceptual Hashing** - Detect similar images despite minor modifications
 
 ### Additional Features
 
@@ -27,7 +37,7 @@
 - **Default Sample Image** - Preloaded image for instant testing without upload
 - **Web-based Interface** - No installation required, runs in browser
 - **Dark Theme** - Professional forensic UI with neon accents
-- **12 Analysis Tabs** - Organized, intuitive workflow
+- **14 Analysis Tabs** - Organized, intuitive workflow
 - **Human-Readable Results** - Authenticity scoring (0-100) and risk levels
 - **Real-time Processing** - Instant visual feedback
 - **Cloud Deployment Ready** - Deploy to Streamlit Cloud in minutes
@@ -103,11 +113,15 @@ VeritasForensics/
 │   ├── frequency_analysis.py       # FFT/DCT analysis
 │   ├── deepfake_detector.py        # GAN detection
 │   ├── resampling_detector.py      # Resampling detection
+│   ├── steganography_detection.py  # LSB steganography detection
+│   ├── hash_verification.py        # Cryptographic provenance
 │   └── util.py                     # Helper functions
 │
 ├── Descriptions/                   # Technique education module (NEW)
 │   ├── ELA.md                      # ELA guide
 │   ├── Metadata.md                 # Metadata guide
+│   ├── Steganography.md            # Steganography detection guide
+│   ├── Hash_Verification.md        # Hash verification guide
 │   ├── Histogram.md                # Histogram guide
 │   ├── Noise_Ghost.md              # Noise/Ghost guide
 │   ├── Quantization.md             # Quantization guide

@@ -18,7 +18,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Machine learning-based forgery detection
 - Real-time video frame analysis
 - Advanced CMFD with SIFT/SURF
-- Blockchain-based image authentication
+
+---
+
+## [1.1.0] - 2025-12-12
+
+### Added - Information Security Modules
+
+- **🔐 Steganography Detection Module**:
+  - LSB (Least Significant Bit) statistical analysis
+  - Chi-square testing for randomness detection
+  - Per-channel (RGB) probability scoring
+  - Block-based spatial analysis with heatmaps
+  - Visual analysis maps highlighting suspicious regions
+  - Batch processing capability
+  - Comprehensive interpretation guidelines
+  - Educational documentation (Descriptions/Steganography.md)
+  - Full test coverage (tests/test_steganography_detection.py)
+
+- **🔑 Cryptographic Hash Verification Module**:
+  - Perceptual hashing (pHash, aHash, dHash, wHash) using imagehash
+  - SHA-256 cryptographic hashing for exact matching
+  - JSON-based blockchain simulation for provenance tracking
+  - Modification history with timestamps
+  - Authenticity scoring (0-100 scale)
+  - Legal chain of custody assessment
+  - Database management (import/export functionality)
+  - Hamming distance calculation for similarity matching
+  - Educational documentation (Descriptions/Hash_Verification.md)
+  - Full test coverage (tests/test_hash_verification.py)
+
+- **UI Integration**:
+  - Two new tabs in Streamlit interface (🔐 Steganography, 🔑 Hash Verify)
+  - Interactive analysis workflows with progress indicators
+  - Visual heatmaps and detailed results display
+  - Database management interface for hash verification
+  - Consistent error handling and user feedback
+  - Educational tooltips and interpretation guides
+
+### Changed
+
+- Updated tab count from 12 to 14 in main application
+- Enhanced TECHNIQUES dictionary with new modules
+- Updated README.md with new feature descriptions
+- Expanded project structure documentation
+
+### Dependencies
+
+- Added `imagehash` for perceptual hashing (pip install imagehash)
+- Confirmed `scipy` already present for statistical tests
+
+### Testing
+
+- 14 passing tests for steganography detection (98% coverage)
+- 18 passing tests for hash verification (84% coverage)
+- Edge case handling for invalid inputs and small images
 
 ---
 
@@ -43,7 +97,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Web-Based Interface**:
 
   - Streamlit-powered interactive GUI
-  - 12-tab navigation system
+  - 12-tab navigation system (now 14 tabs)
   - Real-time parameter adjustment
   - Image upload and preview
   - Dark theme with neon green accents
