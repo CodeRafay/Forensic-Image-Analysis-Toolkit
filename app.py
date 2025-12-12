@@ -2,7 +2,8 @@ import streamlit as st
 import os
 from analysis import (
     ela, metadata_analysis, histogram_analysis, noise_map, jpeg_ghost,
-    quant_table, cmfd, prnu, frequency_analysis, deepfake_detector, resampling_detector
+    quant_table, cmfd, prnu, frequency_analysis, deepfake_detector, resampling_detector,
+    steganography_detection, hash_verification
 )
 
 # 1. Page Configuration
@@ -59,6 +60,8 @@ TECHNIQUES = {
     "📈 Frequency": "Frequency",
     "😁 Deepfake": "Deepfake",
     "🔀 Resampling": "Resampling",
+    "🔐 Steganography": "Steganography",
+    "🔑 Hash Verify": "Hash_Verification",
 }
 
 
@@ -140,9 +143,10 @@ if file_path is not None:
             st.warning(f"Analyzing: {image_name}")
 
     # 5. Analysis Tabs
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12 = st.tabs(
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14 = st.tabs(
         ["🕵️ ELA", "📋 Metadata", "📊 Histogram", "👻 Noise/Ghost", "💾 Quant Table",
-         "🔄 CMFD", "📡 PRNU", "📈 Frequency", "😁 Deepfake", "🔀 Resampling", "ℹ️ Info", "🔬 Advanced"])
+         "🔄 CMFD", "📡 PRNU", "📈 Frequency", "😁 Deepfake", "🔀 Resampling", 
+         "🔐 Steganography", "🔑 Hash Verify", "ℹ️ Info", "🔬 Advanced"])
 
     # --- TAB 1: ELA ---
     with tab1:
@@ -1706,8 +1710,407 @@ if file_path is not None:
                     with st.expander("🐛 View Error Details"):
                         st.exception(e)
 
-    # --- TAB 11: INFO ---
+    # --- TAB 11: STEGANOGRAPHY DETECTION ---
     with tab11:
+        st.subheader("🔐 LSB Steganography Detection")
+        st.write(
+            "Detect hidden data in images using statistical analysis of Least Significant Bits (LSB). "
+            "This module uses chi-square testing to identify non-natural bit patterns that may indicate steganography."
+        )
+
+        if st.button("🚀 Detect Hidden Data", type="primary"):
+            with st.spinner("Analyzing LSB patterns and performing chi-square tests..."):
+                try:
+                    # Perform steganography detection
+                    probability, visual_map, details = steganography_detection.detect_lsb_steganography(
+                        file_path
+                    )
+
+                    # Check for errors
+                    if 'error' in details:
+                        st.error(f"❌ Analysis Error: {details['error']}")
+                    else:
+                        # ========== SUMMARY CARD ==========
+                        st.markdown("---")
+                        st.subheader("📊 Detection Summary")
+
+                        col1, col2, col3 = st.columns(3)
+
+                        interpretation = details['interpretation']
+
+                        with col1:
+                            color_emoji = interpretation['color']
+                            st.metric("Overall Probability", 
+                                     f"{probability:.1f}%")
+                            st.markdown(f"### {color_emoji} **{interpretation['risk_level']} Risk**")
+
+                        with col2:
+                            st.metric("Confidence", interpretation['confidence'])
+                            st.metric("Risk Level", interpretation['risk_level'])
+
+                        with col3:
+                            st.metric("Image Size", 
+                                     f"{details['image_info']['width']}×{details['image_info']['height']}")
+                            st.metric("Total Pixels", 
+                                     f"{details['image_info']['total_pixels']:,}")
+
+                        # Description
+                        st.info(f"**Interpretation**: {interpretation['description']}")
+
+                        # ========== VISUAL ANALYSIS MAP ==========
+                        st.markdown("---")
+                        st.subheader("🔥 Visual Analysis Heatmap")
+                        st.write(
+                            "Heatmap shows steganography probability for each image region. "
+                            "Hot colors (red/orange) indicate high suspicion, cool colors (blue) indicate normal patterns."
+                        )
+                        
+                        if visual_map is not None:
+                            st.image(visual_map, caption="LSB Analysis Heatmap", 
+                                   use_container_width=True)
+
+                        # ========== CHANNEL RESULTS ==========
+                        st.markdown("---")
+                        st.subheader("📺 Per-Channel Analysis")
+                        
+                        channel_cols = st.columns(3)
+                        
+                        for idx, (channel, channel_data) in enumerate(details['channel_results'].items()):
+                            with channel_cols[idx]:
+                                st.markdown(f"**{channel.upper()} Channel**")
+                                
+                                # Create metrics
+                                prob_val = channel_data['steganography_probability']
+                                
+                                if prob_val < 20:
+                                    risk = "🟢 Low"
+                                elif prob_val < 50:
+                                    risk = "🟡 Medium"
+                                elif prob_val < 80:
+                                    risk = "🟠 High"
+                                else:
+                                    risk = "🔴 Critical"
+                                
+                                st.metric("Probability", f"{prob_val:.1f}%")
+                                st.metric("Risk", risk)
+                                
+                                # Show LSB distribution
+                                dist = channel_data['lsb_distribution']
+                                st.caption(f"LSB Distribution: {dist['zeros']} zeros, {dist['ones']} ones")
+                                
+                                # Show chi-square stats
+                                with st.expander("Statistical Details"):
+                                    st.json({
+                                        "Chi-Square Statistic": f"{channel_data['chi_square_statistic']:.4f}",
+                                        "P-Value": f"{channel_data['p_value']:.6f}",
+                                        "Zeros": dist['zeros'],
+                                        "Ones": dist['ones']
+                                    })
+
+                        # ========== INTERPRETATION GUIDE ==========
+                        st.markdown("---")
+                        st.subheader("📖 How to Interpret Results")
+                        
+                        st.markdown("""
+                        **Understanding the Probability Score:**
+                        - **0-20%**: LSB distribution appears natural. No strong evidence of steganography.
+                        - **20-50%**: Some statistical anomalies detected. Further investigation recommended.
+                        - **50-80%**: Significant LSB anomalies. Strong indication of hidden data.
+                        - **80-100%**: Severe anomalies. Very high likelihood of steganography.
+                        
+                        **What to Look For:**
+                        - **Hot regions** in the heatmap (red/orange areas) indicate suspicious LSB patterns
+                        - **Uneven bit distribution** (far from 50/50) suggests non-natural data
+                        - **High chi-square statistic** with low p-value indicates statistical significance
+                        - **Consistent anomalies** across multiple channels strengthen suspicion
+                        
+                        **Important Notes:**
+                        - This test detects LSB steganography, not all types of hidden data
+                        - High scores don't always mean malicious intent (watermarks, metadata)
+                        - Some cameras naturally produce non-random LSB patterns
+                        - Use alongside other forensic techniques for comprehensive analysis
+                        """)
+
+                except Exception as e:
+                    st.error(f"❌ Steganography Detection Error: {str(e)}")
+                    with st.expander("🐛 View Error Details"):
+                        st.exception(e)
+
+    # --- TAB 12: HASH VERIFICATION ---
+    with tab12:
+        st.subheader("🔑 Cryptographic Hash Verification & Provenance Tracking")
+        st.write(
+            "Verify image authenticity using perceptual and cryptographic hashing. "
+            "Track image provenance with blockchain-based storage and detect unauthorized modifications."
+        )
+
+        # Create two sub-sections
+        action = st.radio(
+            "Select Action:",
+            ["Verify Image Provenance", "Add to Blockchain Database", "Database Management"],
+            horizontal=True
+        )
+
+        if action == "Verify Image Provenance":
+            st.markdown("### 🔍 Verify Image Against Database")
+            st.caption("Check if this image exists in the database and assess its authenticity")
+            
+            if st.button("🚀 Verify Image", type="primary"):
+                with st.spinner("Generating hashes and searching database..."):
+                    try:
+                        # Verify provenance
+                        score, history, validity, details = hash_verification.verify_image_provenance(
+                            file_path
+                        )
+
+                        if 'error' in details:
+                            st.error(f"❌ Verification Error: {details['error']}")
+                        else:
+                            # ========== AUTHENTICITY SUMMARY ==========
+                            st.markdown("---")
+                            st.subheader("📊 Authenticity Assessment")
+
+                            col1, col2, col3 = st.columns(3)
+
+                            with col1:
+                                # Color based on score
+                                if score >= 85:
+                                    color = "🟢"
+                                    verdict = "Authenticated"
+                                elif score >= 70:
+                                    color = "🟡"
+                                    verdict = "Likely Authentic"
+                                elif score >= 55:
+                                    color = "🟠"
+                                    verdict = "Questionable"
+                                else:
+                                    color = "🔴"
+                                    verdict = "Unknown/Modified"
+                                
+                                st.metric("Authenticity Score", f"{score}/100")
+                                st.markdown(f"### {color} **{verdict}**")
+
+                            with col2:
+                                st.metric("Matches Found", details['matches_found'])
+                                chain_status = validity.get('chain_of_custody', 'Unknown')
+                                st.metric("Chain of Custody", chain_status)
+
+                            with col3:
+                                if validity.get('valid'):
+                                    st.metric("Legal Status", "✅ Admissible")
+                                else:
+                                    st.metric("Legal Status", "❌ Not Admissible")
+                                
+                                confidence = validity.get('confidence', 'Unknown')
+                                st.metric("Confidence", confidence)
+
+                            # ========== LEGAL VALIDITY ==========
+                            st.markdown("---")
+                            st.subheader("⚖️ Legal Validity Assessment")
+                            
+                            valid = validity.get('valid')
+                            if valid is True:
+                                st.success(f"✅ **Valid**: {validity['reason']}")
+                            elif valid is False:
+                                st.error(f"❌ **Invalid**: {validity['reason']}")
+                            else:
+                                st.warning(f"⚠️ **Uncertain**: {validity['reason']}")
+                            
+                            if 'modifications' in validity:
+                                st.info(f"📝 **Modifications Detected**: {validity['modifications']}")
+
+                            # ========== HASH INFORMATION ==========
+                            st.markdown("---")
+                            st.subheader("🔐 Hash Information")
+                            
+                            col_hash1, col_hash2 = st.columns(2)
+                            
+                            with col_hash1:
+                                st.markdown("**Cryptographic Hash (SHA-256)**")
+                                st.code(details['current_hashes']['sha256'], language=None)
+                                st.caption("Exact file fingerprint - any modification changes this completely")
+
+                            with col_hash2:
+                                st.markdown("**Perceptual Hash (pHash)**")
+                                st.code(details['current_hashes']['perceptual']['phash'], language=None)
+                                st.caption("Similarity-based hash - resistant to minor modifications")
+
+                            # Show all perceptual hashes in expander
+                            with st.expander("🔍 View All Perceptual Hashes"):
+                                st.json(details['current_hashes']['perceptual'])
+
+                            # ========== MODIFICATION HISTORY ==========
+                            if history:
+                                st.markdown("---")
+                                st.subheader("📜 Modification History")
+                                st.write(f"Found {len(history)} related records in database:")
+                                
+                                import pandas as pd
+                                history_df = pd.DataFrame(history)
+                                st.dataframe(history_df, use_container_width=True)
+
+                            # ========== MATCH DETAILS ==========
+                            if details['match_details']:
+                                st.markdown("---")
+                                st.subheader("🎯 Top Matches")
+                                
+                                for idx, match in enumerate(details['match_details'][:3], 1):
+                                    with st.expander(f"Match #{idx}: {match['record']['filename']} ({match['similarity']:.1f}% similar)"):
+                                        col_m1, col_m2 = st.columns(2)
+                                        
+                                        with col_m1:
+                                            st.json({
+                                                "Match Type": match['match_type'].upper(),
+                                                "Similarity": f"{match['similarity']:.2f}%",
+                                                "Hash Distance": match['hash_distance'],
+                                                "Timestamp": match['record']['timestamp']
+                                            })
+                                        
+                                        with col_m2:
+                                            st.json({
+                                                "Filename": match['record']['filename'],
+                                                "File Size": f"{match['record']['file_size']:,} bytes",
+                                                "SHA-256": match['record']['sha256'][:16] + "..."
+                                            })
+
+                            # ========== INTERPRETATION GUIDE ==========
+                            st.markdown("---")
+                            st.subheader("📖 Interpretation Guide")
+                            st.markdown("""
+                            **Authenticity Scores:**
+                            - **100**: Exact cryptographic match - identical file
+                            - **85-99**: Strong perceptual match - minor modifications only
+                            - **70-84**: Moderate match - some modifications detected
+                            - **55-69**: Weak match - significant changes
+                            - **0-54**: No match or unknown provenance
+                            
+                            **Chain of Custody:**
+                            - **Intact**: Image matches database with exact hash
+                            - **Likely Intact**: Minor modifications (compression, resize)
+                            - **Questionable**: Moderate modifications detected
+                            - **Broken**: Significant changes or no database record
+                            
+                            **Legal Admissibility:**
+                            - Requires intact chain of custody
+                            - Exact hash match provides strongest evidence
+                            - Modifications must be documented and explained
+                            - Database integrity must be maintained
+                            """)
+
+                    except Exception as e:
+                        st.error(f"❌ Hash Verification Error: {str(e)}")
+                        with st.expander("🐛 View Error Details"):
+                            st.exception(e)
+
+        elif action == "Add to Blockchain Database":
+            st.markdown("### 📥 Register Image in Database")
+            st.caption("Add this image to the blockchain database for future verification")
+            
+            if st.button("➕ Add to Database", type="primary"):
+                with st.spinner("Generating hashes and adding to blockchain..."):
+                    try:
+                        record = hash_verification.add_to_blockchain(file_path)
+                        
+                        st.success("✅ Image successfully added to blockchain database!")
+                        
+                        st.markdown("---")
+                        st.subheader("📋 Record Details")
+                        
+                        col_r1, col_r2, col_r3 = st.columns(3)
+                        
+                        with col_r1:
+                            st.metric("Record ID", record['id'])
+                            st.metric("Filename", record['filename'])
+                        
+                        with col_r2:
+                            st.metric("File Size", f"{record['file_size']:,} bytes")
+                            st.metric("Format", record['image_info'].get('format', 'Unknown'))
+                        
+                        with col_r3:
+                            img_info = record['image_info']
+                            st.metric("Dimensions", 
+                                     f"{img_info.get('width', '?')}×{img_info.get('height', '?')}")
+                            st.metric("Timestamp", record['timestamp'][:19])
+                        
+                        # Show hashes
+                        st.markdown("---")
+                        st.subheader("🔐 Generated Hashes")
+                        
+                        with st.expander("View Cryptographic Hash"):
+                            st.code(record['sha256'], language=None)
+                        
+                        with st.expander("View Perceptual Hashes"):
+                            st.json(record['perceptual_hashes'])
+
+                    except Exception as e:
+                        st.error(f"❌ Database Addition Error: {str(e)}")
+                        with st.expander("🐛 View Error Details"):
+                            st.exception(e)
+
+        else:  # Database Management
+            st.markdown("### 🗄️ Database Management")
+            
+            # Get database stats
+            try:
+                stats = hash_verification.get_database_stats()
+                
+                st.markdown("#### 📊 Database Statistics")
+                col_s1, col_s2, col_s3 = st.columns(3)
+                
+                with col_s1:
+                    st.metric("Total Records", stats['total_records'])
+                
+                with col_s2:
+                    st.metric("Database Created", 
+                             stats.get('created', 'Unknown')[:10] if stats.get('created') else 'Unknown')
+                
+                with col_s3:
+                    st.metric("Last Updated", 
+                             stats.get('last_updated', 'Never')[:10] if stats.get('last_updated') != 'Never' else 'Never')
+                
+                if stats['total_records'] > 0:
+                    st.markdown("---")
+                    col_d1, col_d2 = st.columns(2)
+                    
+                    with col_d1:
+                        st.metric("Oldest Record", stats.get('oldest_record', 'N/A')[:19])
+                    
+                    with col_d2:
+                        st.metric("Newest Record", stats.get('newest_record', 'N/A')[:19])
+                
+                # Export/Import
+                st.markdown("---")
+                st.markdown("#### 📤 Export/Import Database")
+                
+                col_ei1, col_ei2 = st.columns(2)
+                
+                with col_ei1:
+                    if st.button("📤 Export Database"):
+                        try:
+                            export_path = hash_verification.export_database()
+                            st.success(f"✅ Database exported to: {export_path}")
+                            
+                            # Offer download
+                            if os.path.exists(export_path):
+                                with open(export_path, 'r') as f:
+                                    st.download_button(
+                                        label="⬇️ Download Export",
+                                        data=f.read(),
+                                        file_name=os.path.basename(export_path),
+                                        mime="application/json"
+                                    )
+                        except Exception as e:
+                            st.error(f"Export failed: {str(e)}")
+                
+                with col_ei2:
+                    st.caption("Import functionality requires file upload")
+                    st.info("Upload a previously exported database JSON file to import records")
+
+            except Exception as e:
+                st.error(f"❌ Database Error: {str(e)}")
+
+    # --- TAB 13: INFO ---
+    with tab13:
         st.subheader("About Veritas")
         st.markdown("""
         **Veritas** is a comprehensive digital forensics tool designed to detect image forgeries and tampering.
@@ -1724,10 +2127,12 @@ if file_path is not None:
         - **Frequency Analysis**: FFT/DCT-based tampering detection
         - **Deepfake Detection**: GAN and deepfake artifact classification
         - **Resampling Detection**: Identify image resizing and interpolation methods
+        - **Steganography Detection**: LSB statistical analysis for hidden data
+        - **Hash Verification**: Cryptographic provenance tracking and authentication
         """)
 
-    # --- TAB 12: ADVANCED ---
-    with tab12:
+    # --- TAB 14: ADVANCED ---
+    with tab14:
         st.subheader("Advanced Tools & Batch Analysis")
         st.info("Advanced features (batch processing, report generation) coming soon")
 
