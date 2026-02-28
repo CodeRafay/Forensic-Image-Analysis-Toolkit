@@ -28,30 +28,22 @@ def generate_noise_map(image_path, sigma=2.0):
         variance_per_channel = []
 
         for channel in channels:
-            # Apply Gaussian blur to smooth the image
             blurred = channel.filter(ImageFilter.GaussianBlur(radius=sigma))
-
-            # Calculate difference (high-pass filter effect)
             diff = ImageChops.difference(channel, blurred)
-
-            # Enhance contrast to highlight noise
             enhanced = ImageChops.multiply(diff, diff)
-
             noise_maps.append(enhanced)
-
-            # Calculate variance (noise level)
-            noise_array = np.array(diff)
+            noise_array = np.asarray(diff, dtype=np.float32)
             variance_per_channel.append(float(np.var(noise_array)))
 
-        # Merge channels back
+        img.close()
+
         noise_map = Image.merge('RGB', noise_maps)
 
-        # Save noise map
         noise_path = temp_dir / 'temp_noise_map.png'
         noise_map.save(str(noise_path))
 
-        # Analyze noise consistency
-        noise_array_full = np.array(noise_map)
+        # Analyse noise consistency
+        noise_array_full = np.asarray(noise_map, dtype=np.float32)
 
         # Divide image into blocks and check noise variance
         h, w = noise_array_full.shape[:2]
@@ -64,6 +56,9 @@ def generate_noise_map(image_path, sigma=2.0):
                 block_variances.append(np.var(block))
 
         variance_std = float(np.std(block_variances))
+
+        del noise_array_full  # free large array
+        noise_map.close()
 
         # Generate warnings
         warnings = []

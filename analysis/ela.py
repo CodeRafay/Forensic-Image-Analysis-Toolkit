@@ -1,18 +1,20 @@
-from PIL import Image, ImageChops, ImageEnhance, ImageOps, ImageFilter
+from PIL import Image, ImageChops, ImageEnhance, ImageFilter
 import numpy as np
 import io
-from math import log2, sqrt
 
 # ============================================================
 # ------------------------ ELA CORE ---------------------------
 # ============================================================
 
 
-def perform_ela(image_path, quality=95, error_scale=10, overlay_opacity=0.5):
+def perform_ela(image_path, quality=95, error_scale=10, overlay_opacity=0.5, _img=None):
     """
     Perform Error Level Analysis (ELA) using in-memory operations.
 
     Key fix: Only compress ONCE at target quality, then compare with original.
+
+    Args:
+        _img: Optional pre-loaded PIL.Image to avoid re-opening from disk.
 
     Returns:
         ela_img (PIL.Image)        -> ELA image (grayscale)
@@ -20,8 +22,10 @@ def perform_ela(image_path, quality=95, error_scale=10, overlay_opacity=0.5):
         metrics (dict)
     """
     try:
-        # Load original image
-        original = Image.open(image_path).convert("RGB")
+        # Re-use provided image or load from disk
+        original = _img.copy() if _img is not None else Image.open(image_path).convert("RGB")
+        if original.mode != "RGB":
+            original = original.convert("RGB")
 
         # Compress ONCE at target quality
         buffer = io.BytesIO()
@@ -31,6 +35,7 @@ def perform_ela(image_path, quality=95, error_scale=10, overlay_opacity=0.5):
 
         # Calculate difference between original and compressed
         diff = ImageChops.difference(original, compressed)
+        compressed.close()
 
         # Enhance the difference with error scale
         extrema = diff.getextrema()
@@ -48,15 +53,19 @@ def perform_ela(image_path, quality=95, error_scale=10, overlay_opacity=0.5):
         ela_overlay = Image.blend(
             original, ela_img.convert("RGB"), alpha=overlay_opacity)
 
-        # Compute metrics
+        # Compute metrics — use np.asarray (no copy) then release
         diff_np = np.asarray(diff, dtype=np.float32)
-        max_val = diff_np.max()
+        max_val = float(diff_np.max())
         metrics = {
-            "max_diff": float(max_val),
+            "max_diff": max_val,
             "mean_diff": float(diff_np.mean()),
             "std_diff": float(diff_np.std()),
             "anomaly_score": float(diff_np.mean() + 2 * diff_np.std())
         }
+        del diff_np, diff
+
+        if _img is not None:
+            del original  # we made a copy; free it
 
         return ela_img, ela_overlay, metrics
 
@@ -65,12 +74,15 @@ def perform_ela(image_path, quality=95, error_scale=10, overlay_opacity=0.5):
         return None, None, None
 
 
-def ela_multi_quality(image_path, qualities=[75, 85, 95], error_scale=10, overlay_opacity=0.5):
+def ela_multi_quality(image_path, qualities=[75, 85, 95], error_scale=10, overlay_opacity=0.5, _img=None):
     """Run ELA at multiple JPEG compression levels."""
+    # Load once and pass to each call
+    img = _img if _img is not None else Image.open(image_path).convert("RGB")
     results = {}
     for q in qualities:
         ela_img, overlay_img, metrics = perform_ela(
-            image_path, quality=q, error_scale=error_scale, overlay_opacity=overlay_opacity
+            image_path, quality=q, error_scale=error_scale,
+            overlay_opacity=overlay_opacity, _img=img
         )
         if ela_img is not None:
             results[q] = {
@@ -78,6 +90,8 @@ def ela_multi_quality(image_path, qualities=[75, 85, 95], error_scale=10, overla
                 "overlay": overlay_img,
                 "metrics": metrics
             }
+    if _img is None:
+        img.close()
     return results
 
 
@@ -109,17 +123,20 @@ def block_ela_stats(ela_img, block=8):
 # ============================================================
 
 
-def noise_map(image_path):
+def noise_map(image_path, _gray_img=None):
     """Extract a normalized edge/noise map."""
     try:
-        img = Image.open(image_path).convert("L")
+        img = _gray_img if _gray_img is not None else Image.open(
+            image_path).convert("L")
         edges = img.filter(ImageFilter.FIND_EDGES)
 
         edges_np = np.asarray(edges, dtype=np.float32)
-        edges_np = 255 * (edges_np - edges_np.min()) / \
-            (edges_np.max() - edges_np.min() + 1e-5)
+        emin, emax = edges_np.min(), edges_np.max()
+        edges_np = 255 * (edges_np - emin) / (emax - emin + 1e-5)
 
-        return Image.fromarray(edges_np.astype(np.uint8))
+        result = Image.fromarray(edges_np.astype(np.uint8))
+        del edges_np
+        return result
 
     except Exception as e:
         print(f"[NOISE MAP ERROR] {e}")
@@ -130,15 +147,18 @@ def noise_map(image_path):
 # ============================================================
 
 
-def sharpness_map(image_path):
+def sharpness_map(image_path, _gray_img=None):
     """Laplacian-like sharpness map."""
     try:
-        img = Image.open(image_path).convert("L")
+        img = _gray_img if _gray_img is not None else Image.open(
+            image_path).convert("L")
         lap = img.filter(ImageFilter.FIND_EDGES)
         lap_np = np.asarray(lap, dtype=np.float32)
-        lap_np = 255 * (lap_np - lap_np.min()) / \
-            (lap_np.max() - lap_np.min() + 1e-5)
-        return Image.fromarray(lap_np.astype(np.uint8))
+        lmin, lmax = lap_np.min(), lap_np.max()
+        lap_np = 255 * (lap_np - lmin) / (lmax - lmin + 1e-5)
+        result = Image.fromarray(lap_np.astype(np.uint8))
+        del lap_np
+        return result
     except Exception as e:
         print(f"[SHARPNESS MAP ERROR] {e}")
         return None
@@ -156,9 +176,10 @@ def patch_entropy(patch):
     return -np.sum(p * np.log2(p))
 
 
-def entropy_map(image_path, patch_size=16):
+def entropy_map(image_path, patch_size=16, _gray_img=None):
     """Compute local Shannon entropy over sliding patches."""
-    img = Image.open(image_path).convert("L")
+    img = _gray_img if _gray_img is not None else Image.open(
+        image_path).convert("L")
     arr = np.asarray(img, dtype=np.uint8)
 
     h, w = arr.shape
@@ -170,8 +191,11 @@ def entropy_map(image_path, patch_size=16):
             e = patch_entropy(patch)
             ent[y:y+patch_size, x:x+patch_size] = e
 
-    ent = 255 * (ent - ent.min()) / (ent.max() - ent.min() + 1e-5)
-    return Image.fromarray(ent.astype(np.uint8))
+    emin, emax = ent.min(), ent.max()
+    ent = 255 * (ent - emin) / (emax - emin + 1e-5)
+    result = Image.fromarray(ent.astype(np.uint8))
+    del ent, arr
+    return result
 
 # ============================================================
 # -------------------------- SSIM MAP -------------------------
@@ -219,10 +243,17 @@ def forensic_analysis(image_path, qualities=[75, 85, 95], error_scale=10, overla
     """
     Full forensic pipeline returning all maps + metrics in one dictionary.
     Streamlit-ready.
+
+    Memory-optimised: loads image once and passes it to sub-functions.
     """
+    # Load once — used by all sub-functions
+    original = Image.open(image_path).convert("RGB")
+    gray = original.convert("L")
+
     # ---------- ELA ----------
     ela_results = ela_multi_quality(
-        image_path, qualities, error_scale=error_scale, overlay_opacity=overlay_opacity
+        image_path, qualities, error_scale=error_scale,
+        overlay_opacity=overlay_opacity, _img=original
     )
 
     # Use first quality in list as primary quality
@@ -230,24 +261,29 @@ def forensic_analysis(image_path, qualities=[75, 85, 95], error_scale=10, overla
 
     # Primary ELA for downstream use
     ela_primary, overlay_primary, metrics_primary = perform_ela(
-        image_path, quality=primary_quality, error_scale=error_scale, overlay_opacity=overlay_opacity
+        image_path, quality=primary_quality, error_scale=error_scale,
+        overlay_opacity=overlay_opacity, _img=original
     )
 
     # Block-based statistics
     block_stats = block_ela_stats(ela_primary)
 
-    # Noise / Sharpness / Entropy
-    noise = noise_map(image_path)
-    sharp = sharpness_map(image_path)
-    entropy = entropy_map(image_path)
+    # Noise / Sharpness / Entropy — pass pre-loaded grayscale image
+    noise = noise_map(image_path, _gray_img=gray)
+    sharp = sharpness_map(image_path, _gray_img=gray)
+    entropy = entropy_map(image_path, _gray_img=gray)
 
-    # SSIM
-    original = Image.open(image_path)
+    # SSIM — reuse the already-open original
     buffer = io.BytesIO()
     original.save(buffer, "JPEG", quality=primary_quality)
     buffer.seek(0)
     compressed_primary = Image.open(buffer)
     ssim_img, ssim_score = ssim_map(original, compressed_primary)
+    compressed_primary.close()
+
+    # Free the source images — they've been fully consumed
+    original.close()
+    gray.close()
 
     # Combined Report - using consistent key names
     report = {

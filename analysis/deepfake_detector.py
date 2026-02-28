@@ -19,6 +19,7 @@ def detect_deepfake_artifacts(image_path):
     try:
         img = Image.open(image_path).convert('RGB')
         img_array = np.array(img, dtype=np.float32)
+        img.close()
 
         # Check for common GAN artifacts
         # 1. Frequency anomalies (GANs produce artifacts in specific frequency bands)
@@ -27,6 +28,7 @@ def detect_deepfake_artifacts(image_path):
         gray = np.mean(img_array, axis=2)
         fft_result = fft2(gray)
         magnitude = np.abs(fftshift(fft_result))
+        del fft_result  # free complex128 array
 
         # Analyze specific frequency bands used by GANs
         h, w = magnitude.shape
@@ -36,15 +38,21 @@ def detect_deepfake_artifacts(image_path):
         high_freq_ring = magnitude[center_h -
                                    20:center_h+20, center_w-20:center_w+20]
         high_freq_variance = np.var(high_freq_ring)
+        del magnitude  # free large array
 
         # 2. Texture consistency check
         # GANs often produce subtle texture inconsistencies
         r, g, b = img_array[:, :, 0], img_array[:, :, 1], img_array[:, :, 2]
 
-        # Channel correlation
-        rg_correlation = np.corrcoef(r.flatten(), g.flatten())[0, 1]
-        rb_correlation = np.corrcoef(r.flatten(), b.flatten())[0, 1]
-        gb_correlation = np.corrcoef(g.flatten(), b.flatten())[0, 1]
+        # Channel correlation — use downsampled views to avoid huge .flatten()
+        # Subsample every 4th pixel for correlation (saves ~16× memory)
+        r_sub = r[::4, ::4].ravel()
+        g_sub = g[::4, ::4].ravel()
+        b_sub = b[::4, ::4].ravel()
+        rg_correlation = float(np.corrcoef(r_sub, g_sub)[0, 1])
+        rb_correlation = float(np.corrcoef(r_sub, b_sub)[0, 1])
+        gb_correlation = float(np.corrcoef(g_sub, b_sub)[0, 1])
+        del r_sub, g_sub, b_sub
 
         avg_channel_correlation = np.mean(
             [rg_correlation, rb_correlation, gb_correlation])
@@ -58,6 +66,7 @@ def detect_deepfake_artifacts(image_path):
 
         # High gradient at edges is natural; too uniform suggests blurring
         edge_sharpness = np.std(gradient_magnitude)
+        del gradient_x, gradient_y, gradient_magnitude, gray, img_array
 
         result = {
             "status": "analysis_complete",
@@ -92,13 +101,17 @@ def detect_gan_fingerprint(image_path):
     try:
         img = Image.open(image_path).convert('RGB')
         img_array = np.array(img, dtype=np.float32)
+        img.close()
 
         # Analyze spectral properties unique to GANs
         from scipy.fft import fft2, fftshift
 
         gray = np.mean(img_array, axis=2)
+        del img_array  # free RGB array early
         fft_result = fft2(gray)
+        del gray
         magnitude = np.abs(fftshift(fft_result))
+        del fft_result  # free complex128 array
 
         # Apply log scale for better visualization
         magnitude_log = np.log(magnitude + 1)

@@ -19,12 +19,15 @@ def analyze_frequency_domain(image_path):
     try:
         img = Image.open(image_path).convert('L')
         img_array = np.array(img, dtype=np.float32)
+        img.close()
 
         # Apply FFT
         fft_result = fft2(img_array)
         fft_shifted = fftshift(fft_result)
+        del fft_result  # free unshifted result
         magnitude_spectrum = np.abs(fft_shifted)
         phase_spectrum = np.angle(fft_shifted)
+        del fft_shifted  # free complex array
 
         # Calculate statistics
         magnitude_mean = np.mean(magnitude_spectrum)
@@ -49,6 +52,10 @@ def analyze_frequency_domain(image_path):
         # Look for unexpected peaks in frequency domain
         spectrum_normalized = magnitude_spectrum / magnitude_max
         peaks_count = np.sum(spectrum_normalized > 0.5)
+        del spectrum_normalized
+
+        # Free phase spectrum after extracting its stat
+        del phase_spectrum
 
         # Calculate frequency distribution uniformity
         freq_histogram = np.histogram(magnitude_spectrum.flatten(), bins=50)[0]
@@ -128,6 +135,8 @@ def analyze_frequency_domain(image_path):
         plt.tight_layout()
         plt.savefig(magnitude_vis_path, dpi=100, bbox_inches='tight')
         plt.close()
+
+        del magnitude_spectrum  # free after visualization
 
         result = {
             "status": "success",
@@ -225,10 +234,10 @@ def detect_dct_anomalies(image_path):
     """
     try:
         from scipy.fftpack import dct
-        import cv2
 
         img = Image.open(image_path).convert('L')
         img_array = np.array(img, dtype=np.float32)
+        img.close()
 
         # Apply 2D DCT
         dct_result = dct(dct(img_array.T, norm='ortho').T, norm='ortho')
@@ -394,6 +403,8 @@ def detect_dct_anomalies(image_path):
         plt.tight_layout()
         plt.savefig(dct_vis_path, dpi=100, bbox_inches='tight')
         plt.close()
+
+        del dct_result, dct_log, block_map, img_array  # free large arrays
 
         result = {
             "status": "success",

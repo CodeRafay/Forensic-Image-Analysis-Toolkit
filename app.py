@@ -1,10 +1,43 @@
 import streamlit as st
 import os
-from analysis import (
-    ela, metadata_analysis, histogram_analysis, noise_map, jpeg_ghost,
-    quant_table, cmfd, prnu, frequency_analysis, deepfake_detector, resampling_detector,
-    steganography_detection, hash_verification
-)
+import gc
+from PIL import Image
+import analysis  # lazy sub-module imports via __getattr__
+
+# ── Memory-management helpers ─────────────────────────────────────
+MAX_DIMENSION = 2048  # max width/height for analysis (keeps RAM in check)
+
+
+def _downscale_if_needed(file_path):
+    """
+    If the image exceeds MAX_DIMENSION on either axis, downscale it
+    and save a temp copy. Returns the (possibly new) path to use for analysis.
+    This prevents a single large upload from blowing up memory across all tabs.
+    """
+    try:
+        img = Image.open(file_path)
+        w, h = img.size
+        if w <= MAX_DIMENSION and h <= MAX_DIMENSION:
+            img.close()
+            return file_path  # no downscale needed
+        # Calculate new size preserving aspect ratio
+        scale = min(MAX_DIMENSION / w, MAX_DIMENSION / h)
+        new_size = (int(w * scale), int(h * scale))
+        img = img.resize(new_size, Image.LANCZOS)
+        downscaled_path = os.path.join(
+            "temp", "_analysis_" + os.path.basename(file_path))
+        os.makedirs("temp", exist_ok=True)
+        img.save(downscaled_path, quality=95)
+        img.close()
+        return downscaled_path
+    except Exception:
+        return file_path  # fallback to original on any error
+
+
+def _cleanup():
+    """Prompt Python's garbage collector after heavy work."""
+    gc.collect()
+
 
 # 1. Page Configuration
 st.set_page_config(
@@ -70,31 +103,25 @@ DEFAULT_SAMPLE_IMAGE = os.path.join(
     "assets", "sample images", "sampleImg.jpeg")
 
 # 6. Sidebar - File Upload Section
-st.sidebar.title("🔍 Veritas Tool")
-st.sidebar.info(
-    "Upload a digital image to perform forensic analysis, or test with the default sample image.")
+st.sidebar.markdown("#### 🔍 Veritas Tool")
 uploaded_file = st.sidebar.file_uploader(
-    "Choose an Image", type=["jpg", "jpeg", "png"])
+    "Upload an image to analyze", type=["jpg", "jpeg", "png"])
 
 # Show info about default sample
 if uploaded_file is None and os.path.exists(DEFAULT_SAMPLE_IMAGE):
-    st.sidebar.success("📸 Using default sample image for testing")
-    st.sidebar.caption("Upload your own image above to analyze it instead")
+    st.sidebar.caption("📸 No upload? Using default sample image.")
 
 # 7. Sidebar - Technique Descriptions Section
-st.sidebar.markdown("---")
-st.sidebar.subheader("📚 Technique Descriptions")
-st.sidebar.caption("Learn about each forensic analysis method")
+with st.sidebar.expander("📚 Technique Descriptions", expanded=False):
+    st.caption("Learn about each forensic analysis method")
+    desc_cols = st.columns(2)
+    selected_description = None
 
-# Create columns for description buttons
-desc_cols = st.sidebar.columns(2)
-selected_description = None
-
-for idx, (display_name, technique_key) in enumerate(TECHNIQUES.items()):
-    col = desc_cols[idx % 2]
-    if col.button(display_name, key=f"desc_{technique_key}", use_container_width=True):
-        selected_description = technique_key
-        st.session_state.selected_description = technique_key
+    for idx, (display_name, technique_key) in enumerate(TECHNIQUES.items()):
+        col = desc_cols[idx % 2]
+        if col.button(display_name, key=f"desc_{technique_key}", use_container_width=True):
+            selected_description = technique_key
+            st.session_state.selected_description = technique_key
 
 # Check session state for selected description
 if "selected_description" in st.session_state:
@@ -130,6 +157,9 @@ else:
 # Process the image if available
 if file_path is not None:
 
+    # Downscale large images to cap memory usage across all analysis modules
+    analysis_path = _downscale_if_needed(file_path)
+
     # Display Original
     col1, col2 = st.columns([1, 2])
     with col1:
@@ -145,7 +175,7 @@ if file_path is not None:
     # 5. Analysis Tabs
     tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14 = st.tabs(
         ["🕵️ ELA", "📋 Metadata", "📊 Histogram", "👻 Noise/Ghost", "💾 Quant Table",
-         "🔄 CMFD", "📡 PRNU", "📈 Frequency", "😁 Deepfake", "🔀 Resampling", 
+         "🔄 CMFD", "📡 PRNU", "📈 Frequency", "😁 Deepfake", "🔀 Resampling",
          "🔐 Steganography", "🔑 Hash Verify", "ℹ️ Info", "🔬 Advanced"])
 
     # --- TAB 1: ELA ---
@@ -189,8 +219,8 @@ if file_path is not None:
         if st.button("Run Full ELA Analysis"):
             with st.spinner("Running Enhanced ELA Pipeline..."):
                 try:
-                    report = ela.forensic_analysis(
-                        file_path,
+                    report = analysis.ela.forensic_analysis(
+                        analysis_path,
                         qualities=[quality],
                         error_scale=error_scale,
                         overlay_opacity=overlay_opacity
@@ -253,6 +283,8 @@ if file_path is not None:
 
                 except Exception as e:
                     st.error(f"ELA Processing Error: {e}")
+                finally:
+                    _cleanup()
 
     # --- TAB 2: METADATA ---
     with tab2:
@@ -266,7 +298,7 @@ if file_path is not None:
             with st.spinner("Analyzing metadata and file structure..."):
                 try:
                     # Run full analysis
-                    report = metadata_analysis.full_metadata_analysis(
+                    report = analysis.metadata_analysis.full_metadata_analysis(
                         file_path)
 
                     # ========== SUMMARY CARD ==========
@@ -557,7 +589,8 @@ if file_path is not None:
         if st.button("🚀 Generate Histogram Analysis", type="primary"):
             with st.spinner("Analyzing color distribution patterns..."):
                 try:
-                    result = histogram_analysis.generate_histogram(file_path)
+                    result = analysis.histogram_analysis.generate_histogram(
+                        analysis_path)
 
                     if result['status'] == 'success':
                         # Display histogram image
@@ -644,7 +677,8 @@ if file_path is not None:
         if st.button("🚀 Generate Noise Map", type="primary", key="noise_btn"):
             with st.spinner("Extracting noise patterns..."):
                 try:
-                    result = noise_map.generate_noise_map(file_path)
+                    result = analysis.noise_map.generate_noise_map(
+                        analysis_path)
 
                     if result['status'] == 'success':
                         # Display noise map
@@ -705,7 +739,7 @@ if file_path is not None:
         if st.button("🚀 Detect JPEG Ghost", type="primary", key="ghost_btn"):
             with st.spinner("Analyzing compression history..."):
                 try:
-                    result = jpeg_ghost.detect_jpeg_ghost(file_path)
+                    result = analysis.jpeg_ghost.detect_jpeg_ghost(file_path)
 
                     if result['status'] == 'success':
                         # Display combined ghost visualization
@@ -779,7 +813,8 @@ if file_path is not None:
         if st.button("🚀 Analyze Quantization Tables", type="primary"):
             with st.spinner("Extracting and analyzing Q-tables..."):
                 try:
-                    result = quant_table.analyze_quantization_table(file_path)
+                    result = analysis.quant_table.analyze_quantization_table(
+                        file_path)
 
                     if result['status'] == 'success':
                         # Quality estimation
@@ -873,8 +908,8 @@ if file_path is not None:
         if st.button("🚀 Run CMFD Analysis", type="primary"):
             with st.spinner("Analyzing for copy-move forgery... This may take a minute..."):
                 try:
-                    result = cmfd.detect_copy_move(
-                        file_path, block_size=block_size, threshold=threshold)
+                    result = analysis.cmfd.detect_copy_move(
+                        analysis_path, block_size=block_size, threshold=threshold)
 
                     if result['status'] == 'success':
                         # Display result image
@@ -961,6 +996,8 @@ if file_path is not None:
                     st.error(f"❌ CMFD Error: {str(e)}")
                     with st.expander("🐛 View Error Details"):
                         st.exception(e)
+                finally:
+                    _cleanup()
 
     # --- TAB 7: PRNU ---
     with tab7:
@@ -985,7 +1022,7 @@ if file_path is not None:
         if st.button("🚀 Analyze PRNU", type="primary"):
             with st.spinner("Extracting sensor fingerprint..."):
                 try:
-                    result = prnu.analyze_prnu(
+                    result = analysis.prnu.analyze_prnu(
                         file_path, reference_image_path=reference_path)
 
                     if result['status'] == 'success':
@@ -1073,6 +1110,8 @@ if file_path is not None:
                     st.error(f"❌ PRNU Analysis Error: {str(e)}")
                     with st.expander("🐛 View Error Details"):
                         st.exception(e)
+                finally:
+                    _cleanup()
 
     # --- TAB 8: FREQUENCY ANALYSIS ---
     with tab8:
@@ -1093,8 +1132,8 @@ if file_path is not None:
         if st.button("🚀 Run FFT Analysis", type="primary", key="fft_btn"):
             with st.spinner("Computing FFT spectrum..."):
                 try:
-                    result = frequency_analysis.analyze_frequency_domain(
-                        file_path)
+                    result = analysis.frequency_analysis.analyze_frequency_domain(
+                        analysis_path)
 
                     if result.get('status') == 'success':
                         # Overall verdict
@@ -1220,7 +1259,8 @@ if file_path is not None:
         if st.button("🚀 Detect DCT Anomalies", type="primary", key="dct_btn"):
             with st.spinner("Analyzing DCT coefficients..."):
                 try:
-                    result = frequency_analysis.detect_dct_anomalies(file_path)
+                    result = analysis.frequency_analysis.detect_dct_anomalies(
+                        analysis_path)
 
                     if result.get('status') == 'success':
                         # Overall verdict
@@ -1370,7 +1410,8 @@ if file_path is not None:
                     st.error(f"❌ DCT Analysis Error: {str(e)}")
                     with st.expander("🐛 View Error Details"):
                         st.exception(e)
-                    st.error(f"❌ DCT Analysis Error: {str(e)}")
+                finally:
+                    _cleanup()
 
     # --- TAB 9: DEEPFAKE DETECTION ---
     with tab9:
@@ -1388,8 +1429,8 @@ if file_path is not None:
         if st.button("🚀 Detect Deepfake Artifacts", type="primary", key="artifacts_btn"):
             with st.spinner("Analyzing for deepfake artifacts..."):
                 try:
-                    result = deepfake_detector.detect_deepfake_artifacts(
-                        file_path)
+                    result = analysis.deepfake_detector.detect_deepfake_artifacts(
+                        analysis_path)
 
                     if result.get('status') == 'success':
                         # Display metrics
@@ -1441,8 +1482,8 @@ if file_path is not None:
         if st.button("🚀 Detect GAN Fingerprint", type="primary", key="gan_btn"):
             with st.spinner("Analyzing GAN fingerprint patterns..."):
                 try:
-                    result = deepfake_detector.detect_gan_fingerprint(
-                        file_path)
+                    result = analysis.deepfake_detector.detect_gan_fingerprint(
+                        analysis_path)
 
                     if result.get('status') == 'success':
                         # GAN Score Display
@@ -1549,6 +1590,8 @@ if file_path is not None:
                     st.error(f"❌ GAN Detection Error: {str(e)}")
                     with st.expander("🐛 View Error Details"):
                         st.exception(e)
+                finally:
+                    _cleanup()
 
     # --- TAB 10: RESAMPLING DETECTION ---
     with tab10:
@@ -1566,7 +1609,8 @@ if file_path is not None:
         if st.button("🚀 Detect Resampling", type="primary", key="resample_btn"):
             with st.spinner("Analyzing for resampling artifacts..."):
                 try:
-                    result = resampling_detector.detect_resampling(file_path)
+                    result = analysis.resampling_detector.detect_resampling(
+                        file_path)
 
                     if result.get('status') == 'success':
                         # Resampling Detection Result
@@ -1650,7 +1694,7 @@ if file_path is not None:
         if st.button("🚀 Identify Interpolation Method", type="primary", key="interp_btn"):
             with st.spinner("Analyzing interpolation patterns..."):
                 try:
-                    result = resampling_detector.detect_interpolation_method(
+                    result = analysis.resampling_detector.detect_interpolation_method(
                         file_path)
 
                     if result.get('status') == 'success':
@@ -1722,7 +1766,7 @@ if file_path is not None:
             with st.spinner("Analyzing LSB patterns and performing chi-square tests..."):
                 try:
                     # Perform steganography detection
-                    probability, visual_map, details = steganography_detection.detect_lsb_steganography(
+                    probability, visual_map, details = analysis.steganography_detection.detect_lsb_steganography(
                         file_path
                     )
 
@@ -1740,22 +1784,26 @@ if file_path is not None:
 
                         with col1:
                             color_emoji = interpretation['color']
-                            st.metric("Overall Probability", 
-                                     f"{probability:.1f}%")
-                            st.markdown(f"### {color_emoji} **{interpretation['risk_level']} Risk**")
+                            st.metric("Overall Probability",
+                                      f"{probability:.1f}%")
+                            st.markdown(
+                                f"### {color_emoji} **{interpretation['risk_level']} Risk**")
 
                         with col2:
-                            st.metric("Confidence", interpretation['confidence'])
-                            st.metric("Risk Level", interpretation['risk_level'])
+                            st.metric("Confidence",
+                                      interpretation['confidence'])
+                            st.metric("Risk Level",
+                                      interpretation['risk_level'])
 
                         with col3:
-                            st.metric("Image Size", 
-                                     f"{details['image_info']['width']}×{details['image_info']['height']}")
-                            st.metric("Total Pixels", 
-                                     f"{details['image_info']['total_pixels']:,}")
+                            st.metric("Image Size",
+                                      f"{details['image_info']['width']}×{details['image_info']['height']}")
+                            st.metric("Total Pixels",
+                                      f"{details['image_info']['total_pixels']:,}")
 
                         # Description
-                        st.info(f"**Interpretation**: {interpretation['description']}")
+                        st.info(
+                            f"**Interpretation**: {interpretation['description']}")
 
                         # ========== VISUAL ANALYSIS MAP ==========
                         st.markdown("---")
@@ -1764,24 +1812,24 @@ if file_path is not None:
                             "Heatmap shows steganography probability for each image region. "
                             "Hot colors (red/orange) indicate high suspicion, cool colors (blue) indicate normal patterns."
                         )
-                        
+
                         if visual_map is not None:
-                            st.image(visual_map, caption="LSB Analysis Heatmap", 
-                                   use_container_width=True)
+                            st.image(visual_map, caption="LSB Analysis Heatmap",
+                                     use_container_width=True)
 
                         # ========== CHANNEL RESULTS ==========
                         st.markdown("---")
                         st.subheader("📺 Per-Channel Analysis")
-                        
+
                         channel_cols = st.columns(3)
-                        
+
                         for idx, (channel, channel_data) in enumerate(details['channel_results'].items()):
                             with channel_cols[idx]:
                                 st.markdown(f"**{channel.upper()} Channel**")
-                                
+
                                 # Create metrics
                                 prob_val = channel_data['steganography_probability']
-                                
+
                                 if prob_val < 20:
                                     risk = "🟢 Low"
                                 elif prob_val < 50:
@@ -1790,14 +1838,15 @@ if file_path is not None:
                                     risk = "🟠 High"
                                 else:
                                     risk = "🔴 Critical"
-                                
+
                                 st.metric("Probability", f"{prob_val:.1f}%")
                                 st.metric("Risk", risk)
-                                
+
                                 # Show LSB distribution
                                 dist = channel_data['lsb_distribution']
-                                st.caption(f"LSB Distribution: {dist['zeros']} zeros, {dist['ones']} ones")
-                                
+                                st.caption(
+                                    f"LSB Distribution: {dist['zeros']} zeros, {dist['ones']} ones")
+
                                 # Show chi-square stats
                                 with st.expander("Statistical Details"):
                                     st.json({
@@ -1810,7 +1859,7 @@ if file_path is not None:
                         # ========== INTERPRETATION GUIDE ==========
                         st.markdown("---")
                         st.subheader("📖 How to Interpret Results")
-                        
+
                         st.markdown("""
                         **Understanding the Probability Score:**
                         - **0-20%**: LSB distribution appears natural. No strong evidence of steganography.
@@ -1847,24 +1896,27 @@ if file_path is not None:
         # Create two sub-sections
         action = st.radio(
             "Select Action:",
-            ["Verify Image Provenance", "Add to Blockchain Database", "Database Management"],
+            ["Verify Image Provenance",
+                "Add to Blockchain Database", "Database Management"],
             horizontal=True
         )
 
         if action == "Verify Image Provenance":
             st.markdown("### 🔍 Verify Image Against Database")
-            st.caption("Check if this image exists in the database and assess its authenticity")
-            
+            st.caption(
+                "Check if this image exists in the database and assess its authenticity")
+
             if st.button("🚀 Verify Image", type="primary"):
                 with st.spinner("Generating hashes and searching database..."):
                     try:
                         # Verify provenance
-                        score, history, validity, details = hash_verification.verify_image_provenance(
+                        score, history, validity, details = analysis.hash_verification.verify_image_provenance(
                             file_path
                         )
 
                         if 'error' in details:
-                            st.error(f"❌ Verification Error: {details['error']}")
+                            st.error(
+                                f"❌ Verification Error: {details['error']}")
                         else:
                             # ========== AUTHENTICITY SUMMARY ==========
                             st.markdown("---")
@@ -1886,78 +1938,93 @@ if file_path is not None:
                                 else:
                                     color = "🔴"
                                     verdict = "Unknown/Modified"
-                                
+
                                 st.metric("Authenticity Score", f"{score}/100")
                                 st.markdown(f"### {color} **{verdict}**")
 
                             with col2:
-                                st.metric("Matches Found", details['matches_found'])
-                                chain_status = validity.get('chain_of_custody', 'Unknown')
+                                st.metric("Matches Found",
+                                          details['matches_found'])
+                                chain_status = validity.get(
+                                    'chain_of_custody', 'Unknown')
                                 st.metric("Chain of Custody", chain_status)
 
                             with col3:
                                 if validity.get('valid'):
                                     st.metric("Legal Status", "✅ Admissible")
                                 else:
-                                    st.metric("Legal Status", "❌ Not Admissible")
-                                
-                                confidence = validity.get('confidence', 'Unknown')
+                                    st.metric("Legal Status",
+                                              "❌ Not Admissible")
+
+                                confidence = validity.get(
+                                    'confidence', 'Unknown')
                                 st.metric("Confidence", confidence)
 
                             # ========== LEGAL VALIDITY ==========
                             st.markdown("---")
                             st.subheader("⚖️ Legal Validity Assessment")
-                            
+
                             valid = validity.get('valid')
                             if valid is True:
-                                st.success(f"✅ **Valid**: {validity['reason']}")
+                                st.success(
+                                    f"✅ **Valid**: {validity['reason']}")
                             elif valid is False:
-                                st.error(f"❌ **Invalid**: {validity['reason']}")
+                                st.error(
+                                    f"❌ **Invalid**: {validity['reason']}")
                             else:
-                                st.warning(f"⚠️ **Uncertain**: {validity['reason']}")
-                            
+                                st.warning(
+                                    f"⚠️ **Uncertain**: {validity['reason']}")
+
                             if 'modifications' in validity:
-                                st.info(f"📝 **Modifications Detected**: {validity['modifications']}")
+                                st.info(
+                                    f"📝 **Modifications Detected**: {validity['modifications']}")
 
                             # ========== HASH INFORMATION ==========
                             st.markdown("---")
                             st.subheader("🔐 Hash Information")
-                            
+
                             col_hash1, col_hash2 = st.columns(2)
-                            
+
                             with col_hash1:
                                 st.markdown("**Cryptographic Hash (SHA-256)**")
-                                st.code(details['current_hashes']['sha256'], language=None)
-                                st.caption("Exact file fingerprint - any modification changes this completely")
+                                st.code(details['current_hashes']
+                                        ['sha256'], language=None)
+                                st.caption(
+                                    "Exact file fingerprint - any modification changes this completely")
 
                             with col_hash2:
                                 st.markdown("**Perceptual Hash (pHash)**")
-                                st.code(details['current_hashes']['perceptual']['phash'], language=None)
-                                st.caption("Similarity-based hash - resistant to minor modifications")
+                                st.code(
+                                    details['current_hashes']['perceptual']['phash'], language=None)
+                                st.caption(
+                                    "Similarity-based hash - resistant to minor modifications")
 
                             # Show all perceptual hashes in expander
                             with st.expander("🔍 View All Perceptual Hashes"):
-                                st.json(details['current_hashes']['perceptual'])
+                                st.json(
+                                    details['current_hashes']['perceptual'])
 
                             # ========== MODIFICATION HISTORY ==========
                             if history:
                                 st.markdown("---")
                                 st.subheader("📜 Modification History")
-                                st.write(f"Found {len(history)} related records in database:")
-                                
+                                st.write(
+                                    f"Found {len(history)} related records in database:")
+
                                 import pandas as pd
                                 history_df = pd.DataFrame(history)
-                                st.dataframe(history_df, use_container_width=True)
+                                st.dataframe(
+                                    history_df, use_container_width=True)
 
                             # ========== MATCH DETAILS ==========
                             if details['match_details']:
                                 st.markdown("---")
                                 st.subheader("🎯 Top Matches")
-                                
+
                                 for idx, match in enumerate(details['match_details'][:3], 1):
                                     with st.expander(f"Match #{idx}: {match['record']['filename']} ({match['similarity']:.1f}% similar)"):
                                         col_m1, col_m2 = st.columns(2)
-                                        
+
                                         with col_m1:
                                             st.json({
                                                 "Match Type": match['match_type'].upper(),
@@ -1965,7 +2032,7 @@ if file_path is not None:
                                                 "Hash Distance": match['hash_distance'],
                                                 "Timestamp": match['record']['timestamp']
                                             })
-                                        
+
                                         with col_m2:
                                             st.json({
                                                 "Filename": match['record']['filename'],
@@ -2004,41 +2071,46 @@ if file_path is not None:
 
         elif action == "Add to Blockchain Database":
             st.markdown("### 📥 Register Image in Database")
-            st.caption("Add this image to the blockchain database for future verification")
-            
+            st.caption(
+                "Add this image to the blockchain database for future verification")
+
             if st.button("➕ Add to Database", type="primary"):
                 with st.spinner("Generating hashes and adding to blockchain..."):
                     try:
-                        record = hash_verification.add_to_blockchain(file_path)
-                        
-                        st.success("✅ Image successfully added to blockchain database!")
-                        
+                        record = analysis.hash_verification.add_to_blockchain(
+                            file_path)
+
+                        st.success(
+                            "✅ Image successfully added to blockchain database!")
+
                         st.markdown("---")
                         st.subheader("📋 Record Details")
-                        
+
                         col_r1, col_r2, col_r3 = st.columns(3)
-                        
+
                         with col_r1:
                             st.metric("Record ID", record['id'])
                             st.metric("Filename", record['filename'])
-                        
+
                         with col_r2:
-                            st.metric("File Size", f"{record['file_size']:,} bytes")
-                            st.metric("Format", record['image_info'].get('format', 'Unknown'))
-                        
+                            st.metric(
+                                "File Size", f"{record['file_size']:,} bytes")
+                            st.metric("Format", record['image_info'].get(
+                                'format', 'Unknown'))
+
                         with col_r3:
                             img_info = record['image_info']
-                            st.metric("Dimensions", 
-                                     f"{img_info.get('width', '?')}×{img_info.get('height', '?')}")
+                            st.metric("Dimensions",
+                                      f"{img_info.get('width', '?')}×{img_info.get('height', '?')}")
                             st.metric("Timestamp", record['timestamp'][:19])
-                        
+
                         # Show hashes
                         st.markdown("---")
                         st.subheader("🔐 Generated Hashes")
-                        
+
                         with st.expander("View Cryptographic Hash"):
                             st.code(record['sha256'], language=None)
-                        
+
                         with st.expander("View Perceptual Hashes"):
                             st.json(record['perceptual_hashes'])
 
@@ -2049,62 +2121,67 @@ if file_path is not None:
 
         else:  # Database Management
             st.markdown("### 🗄️ Database Management")
-            
+
             # Get database stats
             try:
-                stats = hash_verification.get_database_stats()
-                
+                stats = analysis.hash_verification.get_database_stats()
+
                 st.markdown("#### 📊 Database Statistics")
                 col_s1, col_s2, col_s3 = st.columns(3)
-                
+
                 with col_s1:
                     st.metric("Total Records", stats['total_records'])
-                
+
                 with col_s2:
-                    st.metric("Database Created", 
-                             stats.get('created', 'Unknown')[:10] if stats.get('created') else 'Unknown')
-                
+                    st.metric("Database Created",
+                              stats.get('created', 'Unknown')[:10] if stats.get('created') else 'Unknown')
+
                 with col_s3:
-                    st.metric("Last Updated", 
-                             stats.get('last_updated', 'Never')[:10] if stats.get('last_updated') != 'Never' else 'Never')
-                
+                    st.metric("Last Updated",
+                              stats.get('last_updated', 'Never')[:10] if stats.get('last_updated') != 'Never' else 'Never')
+
                 if stats['total_records'] > 0:
                     st.markdown("---")
                     col_d1, col_d2 = st.columns(2)
-                    
+
                     with col_d1:
-                        st.metric("Oldest Record", stats.get('oldest_record', 'N/A')[:19])
-                    
+                        st.metric("Oldest Record", stats.get(
+                            'oldest_record', 'N/A')[:19])
+
                     with col_d2:
-                        st.metric("Newest Record", stats.get('newest_record', 'N/A')[:19])
-                
+                        st.metric("Newest Record", stats.get(
+                            'newest_record', 'N/A')[:19])
+
                 # Export/Import
                 st.markdown("---")
                 st.markdown("#### 📤 Export/Import Database")
-                
+
                 col_ei1, col_ei2 = st.columns(2)
-                
+
                 with col_ei1:
                     if st.button("📤 Export Database"):
                         try:
-                            export_path = hash_verification.export_database()
-                            st.success(f"✅ Database exported to: {export_path}")
-                            
+                            export_path = analysis.hash_verification.export_database()
+                            st.success(
+                                f"✅ Database exported to: {export_path}")
+
                             # Offer download
                             if os.path.exists(export_path):
                                 with open(export_path, 'r') as f:
                                     st.download_button(
                                         label="⬇️ Download Export",
                                         data=f.read(),
-                                        file_name=os.path.basename(export_path),
+                                        file_name=os.path.basename(
+                                            export_path),
                                         mime="application/json"
                                     )
                         except Exception as e:
                             st.error(f"Export failed: {str(e)}")
-                
+
                 with col_ei2:
                     st.caption("Import functionality requires file upload")
-                    st.info("Upload a previously exported database JSON file to import records")
+                    st.info(
+                        "Upload a previously exported database JSON file to import records")
 
             except Exception as e:
                 st.error(f"❌ Database Error: {str(e)}")

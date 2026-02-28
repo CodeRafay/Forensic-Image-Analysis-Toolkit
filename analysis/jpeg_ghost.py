@@ -9,6 +9,8 @@ def detect_jpeg_ghost(image_path, quality_steps=(95, 85, 75, 65, 55)):
     Detects JPEG ghost (compression artifacts) by comparing multiple compression levels.
     Helps identify at which quality level the image was previously saved.
 
+    Memory-optimised: single loop instead of double (was compressing 2× per quality).
+
     Args:
         image_path (str): Path to the image file
         quality_steps (tuple): Quality levels to test (default 95, 85, 75, 65, 55)
@@ -25,49 +27,46 @@ def detect_jpeg_ghost(image_path, quality_steps=(95, 85, 75, 65, 55)):
 
         differences = {}
         difference_scores = {}
+        accum = None  # accumulated ghost for combined visualisation
 
-        # Test each quality level
+        # Single pass — score + save + accumulate
         for q in quality_steps:
-            # Use in-memory compression
             buffer = BytesIO()
             original.save(buffer, 'JPEG', quality=q)
             buffer.seek(0)
             resaved = Image.open(buffer)
 
-            # Calculate difference
             diff = ImageChops.difference(original, resaved)
-            diff_array = np.array(diff)
+            resaved.close()
 
-            # Store difference score (lower = likely previous quality)
-            score = float(np.mean(diff_array))
+            # Score (lower = likely previous quality)
+            diff_np = np.asarray(diff, dtype=np.float32)
+            score = float(diff_np.mean())
             difference_scores[q] = score
+            del diff_np
 
-            # Save difference map
+            # Save enhanced difference map
             diff_path = temp_dir / f'temp_ghost_q{q}.png'
-
-            # Enhance for visibility
             enhanced = ImageEnhance.Contrast(diff).enhance(3.0)
             enhanced.save(str(diff_path))
             differences[q] = str(diff_path)
 
-        # Find quality with minimum difference (likely original quality)
-        min_quality = min(difference_scores, key=difference_scores.get)
-
-        # Create combined ghost visualization
-        accum = None
-        for q in quality_steps:
-            buffer = BytesIO()
-            original.save(buffer, 'JPEG', quality=q)
-            buffer.seek(0)
-            resaved = Image.open(buffer)
-            diff = ImageChops.difference(original, resaved)
-
+            # Accumulate for combined visualization
             if accum is None:
-                accum = diff
+                accum = diff.copy()
             else:
                 accum = ImageChops.add(accum, diff)
 
-        # Enhance contrast for visibility
+            diff.close()
+            enhanced.close()
+
+        original.close()
+
+        # Find quality with minimum difference (likely original quality)
+        min_quality = min(difference_scores, key=difference_scores.get)
+
+        # Enhance combined visualization
+        combined_path = None
         if accum:
             extrema = accum.getextrema()
             max_diff = max([ex[1] for ex in extrema]) if extrema else 1
@@ -77,8 +76,7 @@ def detect_jpeg_ghost(image_path, quality_steps=(95, 85, 75, 65, 55)):
 
             combined_path = temp_dir / 'temp_ghost_combined.png'
             accum.save(str(combined_path))
-        else:
-            combined_path = None
+            accum.close()
 
         # Analyze compression history
         warnings = []

@@ -25,11 +25,12 @@ def generate_histogram(image_path):
 
         hist_path = temp_dir / 'temp_histogram.png'
 
-        # Extract channel data
-        r, g, b = img.split()
-        r_data = np.array(list(r.getdata()))
-        g_data = np.array(list(g.getdata()))
-        b_data = np.array(list(b.getdata()))
+        # Extract channel data efficiently — avoid intermediate Python lists
+        # shape (H, W, 3), dtype uint8, zero-copy
+        img_array = np.asarray(img)
+        r_data = img_array[:, :, 0].ravel()   # flat view — no copy
+        g_data = img_array[:, :, 1].ravel()
+        b_data = img_array[:, :, 2].ravel()
 
         # Calculate statistics for each channel
         statistics = {
@@ -94,6 +95,9 @@ def generate_histogram(image_path):
         plt.tight_layout()
         plt.savefig(str(hist_path), dpi=100, bbox_inches='tight')
         plt.close()
+
+        # Free large arrays
+        del img_array, r_data, g_data, b_data
 
         return {
             'histogram_path': str(hist_path),

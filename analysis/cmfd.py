@@ -1,13 +1,14 @@
 import cv2
 import numpy as np
 from pathlib import Path
-from collections import defaultdict
 
 
 def detect_copy_move(image_path, block_size=16, threshold=0.95, min_distance=50):
     """
     Detects copy-move forgery using block matching with PCA-based feature extraction.
     Identifies duplicated regions within the same image (cloning).
+
+    Memory-optimised: uses sorted-row matching instead of O(n²) similarity matrix.
 
     Args:
         image_path (str): Path to the image file
@@ -51,34 +52,48 @@ def detect_copy_move(image_path, block_size=16, threshold=0.95, min_distance=50)
                 blocks.append(features)
                 positions.append((i, j))
 
-        blocks = np.array(blocks)
+        blocks = np.array(blocks, dtype=np.float32)
 
         # Normalize features
-        blocks_normalized = blocks / \
-            (np.linalg.norm(blocks, axis=1, keepdims=True) + 1e-10)
+        norms = np.linalg.norm(blocks, axis=1, keepdims=True) + 1e-10
+        blocks_normalized = blocks / norms
+        del blocks, norms  # free original blocks
 
-        # Find similar blocks using correlation
+        # ---- Memory-efficient matching via lexicographic sort ----
+        # Sort rows so that almost-identical feature vectors end up adjacent.
+        # We only compare each row with its nearest neighbours in the sorted
+        # order, turning O(n²) into O(n·k) where k is a small window.
+        n = len(blocks_normalized)
+        sort_idx = np.lexsort(blocks_normalized[:, ::-1].T)
+        sorted_blocks = blocks_normalized[sort_idx]
+
+        WINDOW = min(20, n)  # neighbours to inspect
         matches = []
-        similarity_matrix = np.dot(blocks_normalized, blocks_normalized.T)
+        MAX_MATCHES = 500  # cap to avoid unbounded memory growth
 
-        for i in range(len(blocks)):
-            for j in range(i + 1, len(blocks)):
-                similarity = similarity_matrix[i, j]
-
+        for i in range(n):
+            for j in range(i + 1, min(i + WINDOW, n)):
+                similarity = float(np.dot(sorted_blocks[i], sorted_blocks[j]))
                 if similarity > threshold:
-                    # Check distance between blocks
-                    pos1 = positions[i]
-                    pos2 = positions[j]
+                    orig_i = int(sort_idx[i])
+                    orig_j = int(sort_idx[j])
+                    pos1 = positions[orig_i]
+                    pos2 = positions[orig_j]
                     distance = np.sqrt(
                         (pos1[0] - pos2[0])**2 + (pos1[1] - pos2[1])**2)
-
                     if distance > min_distance:
                         matches.append({
                             'block1': pos1,
                             'block2': pos2,
-                            'similarity': float(similarity),
+                            'similarity': similarity,
                             'distance': float(distance)
                         })
+                        if len(matches) >= MAX_MATCHES:
+                            break
+            if len(matches) >= MAX_MATCHES:
+                break
+
+        del sorted_blocks, blocks_normalized  # free large arrays
 
         # Create visualization
         result_img = img.copy()
@@ -86,8 +101,7 @@ def detect_copy_move(image_path, block_size=16, threshold=0.95, min_distance=50)
         # Group nearby matches
         match_groups = group_nearby_matches(matches, block_size)
 
-        # Draw rectangles around matched regions
-        # Limit to top 10 groups
+        # Draw rectangles around matched regions – limit to top 10 groups
         for idx, group in enumerate(match_groups[:10]):
             color = (0, 255, 0) if idx % 2 == 0 else (255, 0, 0)
             for match in group:
@@ -97,7 +111,6 @@ def detect_copy_move(image_path, block_size=16, threshold=0.95, min_distance=50)
                               (x1 + block_size, y1 + block_size), color, 2)
                 cv2.rectangle(result_img, (x2, y2),
                               (x2 + block_size, y2 + block_size), color, 2)
-                # Draw line connecting matched regions
                 cv2.line(result_img,
                          (x1 + block_size//2, y1 + block_size//2),
                          (x2 + block_size//2, y2 + block_size//2),
@@ -106,18 +119,23 @@ def detect_copy_move(image_path, block_size=16, threshold=0.95, min_distance=50)
         # Save result
         result_path = temp_dir / 'temp_cmfd_result.png'
         cv2.imwrite(str(result_path), result_img)
+        del result_img, img  # free images
+
+        total_blocks = n
 
         # Generate warnings
         warnings = []
-        if len(matches) > 100:
+        if len(matches) >= MAX_MATCHES:
+            warnings.append(
+                f"Match limit reached ({MAX_MATCHES}) - may include false positives from repetitive patterns")
+        elif len(matches) > 100:
             warnings.append(
                 f"High number of matches ({len(matches)}) - may include false positives from repetitive patterns")
 
-        if len(matches) > 0 and len(matches) < 5:
+        if 0 < len(matches) < 5:
             warnings.append(
                 "Few matches found - potential targeted cloning detected")
 
-        # Analyze match distribution
         if len(matches) > 0:
             similarities = [m['similarity'] for m in matches]
             avg_similarity = np.mean(similarities)
@@ -134,7 +152,7 @@ def detect_copy_move(image_path, block_size=16, threshold=0.95, min_distance=50)
                 "min_distance": min_distance
             },
             "results": {
-                "total_blocks_analyzed": len(blocks),
+                "total_blocks_analyzed": total_blocks,
                 "matches_found": len(matches),
                 "match_groups": len(match_groups),
                 "result_image_path": str(result_path)

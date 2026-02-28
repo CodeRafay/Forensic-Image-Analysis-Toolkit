@@ -1,7 +1,6 @@
 import numpy as np
 from PIL import Image
 from scipy.ndimage import gaussian_filter
-from pathlib import Path
 
 
 def analyze_prnu(image_path, reference_image_path=None):
@@ -20,6 +19,7 @@ def analyze_prnu(image_path, reference_image_path=None):
     try:
         img = Image.open(image_path).convert('RGB')
         img_array = np.array(img, dtype=np.float32)
+        img.close()
 
         # Extract noise residual using Wiener-like filter approach
         # This extracts high-frequency pattern unique to sensor
@@ -85,6 +85,7 @@ def analyze_prnu(image_path, reference_image_path=None):
             try:
                 ref_img = Image.open(reference_image_path).convert('RGB')
                 ref_array = np.array(ref_img, dtype=np.float32)
+                ref_img.close()
                 ref_prnu = extract_prnu_pattern(ref_array)
 
                 # Resize if dimensions don't match
@@ -148,6 +149,7 @@ def extract_prnu_pattern(img_array):
 def compute_prnu_correlation(prnu1, prnu2):
     """
     Computes correlation between two PRNU patterns.
+    Uses subsampling to avoid creating huge flattened copies.
 
     Args:
         prnu1 (np.array): First PRNU pattern
@@ -156,15 +158,14 @@ def compute_prnu_correlation(prnu1, prnu2):
     Returns:
         float: Correlation coefficient (0-1)
     """
-    # Flatten arrays
-    p1_flat = prnu1.flatten()
-    p2_flat = prnu2.flatten()
+    # Subsample every 4th pixel to save memory (~16x smaller)
+    p1 = prnu1[::4, ::4].ravel()
+    p2 = prnu2[::4, ::4].ravel()
 
-    # Normalize
-    p1_norm = (p1_flat - np.mean(p1_flat)) / (np.std(p1_flat) + 1e-10)
-    p2_norm = (p2_flat - np.mean(p2_flat)) / (np.std(p2_flat) + 1e-10)
-
-    # Compute correlation
-    correlation = np.abs(np.corrcoef(p1_norm, p2_norm)[0, 1])
-
+    # Manual Pearson correlation — avoids np.corrcoef's large internal alloc
+    m1, m2 = p1.mean(), p2.mean()
+    s1, s2 = p1.std(), p2.std()
+    if s1 < 1e-10 or s2 < 1e-10:
+        return 0.0
+    correlation = float(np.abs(np.mean((p1 - m1) * (p2 - m2)) / (s1 * s2)))
     return correlation
