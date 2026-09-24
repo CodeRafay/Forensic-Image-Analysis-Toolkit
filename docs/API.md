@@ -2,7 +2,20 @@
 
 ## Analysis Module API Reference
 
-All analysis modules follow a consistent pattern and return standardized result dictionaries.
+Most analysis modules return a result dictionary containing at least:
+
+- `status`: `"success"` (or `"analysis_complete"` for the deepfake and
+  resampling modules) on success, `"error"` otherwise
+- `error`: present only when `status` is an error state
+
+The exceptions are noted per function: `ela.perform_ela`,
+`steganography_detection.detect_lsb_steganography`,
+`hash_verification.verify_image_provenance`, `jpeg_ghost.detect_ghost`,
+`histogram_analysis.detect_histogram_anomalies` and
+`metadata_analysis.detect_thumbnail_mismatch` return tuples.
+
+Modules catch their own exceptions and report failure in the return value
+rather than raising, because the Streamlit app calls them directly.
 
 ---
 
@@ -21,15 +34,18 @@ Performs Error Level Analysis on an image.
 - `error_scale` (int, optional): Scale factor for error visualization (default: 10)
 - `overlay_opacity` (float, optional): Opacity for overlay blend (default: 0.5)
 
-**Returns:**
+**Returns:** a 3-tuple `(ela_img, ela_overlay, metrics)`, or `(None, None, None)`
+on failure.
 
-- `ela_img` (PIL.Image): ELA visualization (grayscale)
-- `ela_overlay` (PIL.Image): ELA blended with original
-- `metrics` (dict): Analysis metrics including:
+- `ela_img` (PIL.Image): ELA visualization
+- `ela_overlay` (PIL.Image): ELA blended with the original
+- `metrics` (dict):
   - `mean_error`: Average error level
   - `max_error`: Maximum error detected
   - `std_error`: Standard deviation of errors
-  - `suspicious_areas_percent`: Percentage of high-error regions
+  - `anomaly_score`: `mean + 2*std`
+  - `suspicious_areas_percent`: Percentage of pixels above
+    `ela.SUSPICIOUS_THRESHOLD` (the same cutoff `threshold_ela()` renders)
 
 **Example:**
 
@@ -37,21 +53,25 @@ Performs Error Level Analysis on an image.
 from analysis import ela
 
 ela_img, overlay, metrics = ela.perform_ela("image.jpg", quality=90)
-print(f"Mean error: {metrics['mean_error']}")
+if metrics is not None:
+    print(f"Mean error: {metrics['mean_error']}")
 ```
 
-#### `multi_quality_ela(image_path, qualities=[70, 85, 95])`
+#### `multi_quality_ela(image_path, qualities=[70, 85, 95], error_scale=10, overlay_opacity=0.5)`
 
-Runs ELA at multiple quality levels for comparison.
-
-**Parameters:**
-
-- `image_path` (str): Path to the image
-- `qualities` (list): List of JPEG quality values
+Runs ELA at multiple quality levels. Also available under its former name
+`ela_multi_quality`.
 
 **Returns:**
 
-- `results` (dict): Dictionary mapping quality → ELA results
+- `results` (dict): `{quality: {"ela": PIL.Image, "overlay": PIL.Image, "metrics": dict}}`
+
+#### Other functions
+
+`forensic_analysis()` runs the full pipeline and returns every map at once.
+`noise_map()`, `sharpness_map()` (Laplacian) and `entropy_map()` each return a
+`PIL.Image`. `block_ela_stats()` returns block statistics, `ssim_map()` returns
+`(diff_image, ssim_score)` and `threshold_ela()` returns a binary mask.
 
 ---
 
@@ -61,21 +81,11 @@ Runs ELA at multiple quality levels for comparison.
 
 Extracts comprehensive metadata from an image.
 
-**Parameters:**
-
-- `image_path` (str): Path to the image file
-
 **Returns:**
 
-- `metadata` (dict): Organized metadata with sections:
-  - `basic_info`: File size, format, dimensions
-  - `exif`: Camera settings, ISO, aperture, etc.
-  - `gps`: GPS coordinates if available
-  - `camera`: Camera make, model, serial
-  - `software`: Editing software used
-  - `timestamps`: Creation, modification dates
-  - `thumbnail`: Embedded thumbnail info
-  - `warnings`: List of suspicious findings
+- `metadata` (dict) with sections `basic_info`, `exif`, `gps`, `camera`,
+  `software`, `timestamps`, `thumbnail`, `warnings`. Failures are appended to
+  `warnings`; the dict is always returned with all sections present.
 
 **Example:**
 
@@ -83,18 +93,27 @@ Extracts comprehensive metadata from an image.
 from analysis import metadata_analysis
 
 meta = metadata_analysis.extract_metadata("image.jpg")
-if meta['gps']:
-    print(f"Location: {meta['gps']['latitude']}, {meta['gps']['longitude']}")
+if meta['gps'].get('coordinates'):
+    print(meta['gps']['coordinates']['google_maps'])
 ```
 
-#### `detect_thumbnail_mismatch(image_path)`
+#### `detect_thumbnail_mismatch(image_path, min_correlation=0.90)`
 
-Checks if embedded thumbnail matches the main image.
+Checks whether the embedded EXIF thumbnail still matches the main image. A
+stale thumbnail can reveal the pre-edit picture.
 
-**Returns:**
+**Returns:** a 2-tuple `(mismatch, details)`
 
-- `mismatch` (bool): True if mismatch detected
-- `details` (dict): Comparison metrics
+- `mismatch` (bool): True if the thumbnail disagrees with the image
+- `details` (dict): `thumbnail_present`, and when present `thumbnail_size`,
+  `main_size`, both aspect ratios, `correlation`, `content_mismatch`,
+  `aspect_ratio_mismatch`, `interpretation`
+
+#### Other functions
+
+`full_metadata_analysis()` combines extraction, anomaly detection and file
+structure analysis. `detect_anomalies()`, `analyze_file_structure()`,
+`extract_gps_coordinates()` and `export_metadata_report()` are also available.
 
 ---
 
@@ -102,69 +121,70 @@ Checks if embedded thumbnail matches the main image.
 
 #### `generate_histogram(image_path)`
 
-Generates RGB histogram visualization.
+Generates an RGB histogram visualization.
 
-**Parameters:**
+**Returns:** `result` (dict)
 
-- `image_path` (str): Path to the image
-
-**Returns:**
-
-- `hist_path` (str): Path to saved histogram image
-- `stats` (dict): Statistical metrics per channel
+- `status`, `histogram_path` (str, saved PNG), `statistics` (per-channel
+  `mean`/`std`/`min`/`max`/`median`), `warnings`, `interpretation`
 
 **Example:**
 
 ```python
 from analysis import histogram_analysis
 
-hist_path, stats = histogram_analysis.generate_histogram("image.jpg")
-print(f"Red channel mean: {stats['red']['mean']}")
+result = histogram_analysis.generate_histogram("image.jpg")
+print(f"Red channel mean: {result['statistics']['red']['mean']}")
 ```
 
 #### `detect_histogram_anomalies(image_path)`
 
-Detects statistical anomalies in histogram.
+Detects statistical anomalies (comb patterns from level adjustment, and
+shadow/highlight clipping).
 
-**Returns:**
+**Returns:** a 2-tuple `(anomalies, severity)`
 
-- `anomalies` (list): List of detected anomalies
-- `severity` (str): "low", "medium", or "high"
+- `anomalies` (list): Detected anomaly descriptions
+- `severity` (str): `"low"` (none), `"medium"` (1-2), or `"high"` (3+)
 
 ---
 
 ### 4. Noise Map (`noise_map.py`)
 
-#### `generate_noise_map(image_path)`
+#### `generate_noise_map(image_path, sigma=2.0)`
 
-Generates noise map using high-pass filtering.
+Generates a noise map using high-pass filtering.
 
-**Parameters:**
+**Returns:** `result` (dict)
 
-- `image_path` (str): Path to the image
-
-**Returns:**
-
-- `noise_img` (PIL.Image): Noise map visualization
-- `metrics` (dict): Noise consistency metrics
+- `status`, `noise_map_path` (str, saved PNG), `metrics`
+  (`channel_noise_variance`, `overall_variance`, `block_variance_std`,
+  `blocks_analyzed`), `warnings`, `interpretation`
 
 ---
 
 ### 5. JPEG Ghost (`jpeg_ghost.py`)
 
+#### `detect_jpeg_ghost(image_path, quality_steps=(95, 85, 75, 65, 55))`
+
+Detects JPEG compression ghosts, writing visualizations to `temp/`.
+
+**Returns:** `result` (dict)
+
+- `status`, `combined_ghost_path`, `difference_maps` (`{quality: path}`),
+  `difference_scores` (`{quality: mean difference}`),
+  `estimated_last_save_quality`, `quality_confidence`, `warnings`,
+  `interpretation`
+
 #### `detect_ghost(image_path, quality_steps=(90, 70, 50))`
 
-Detects JPEG compression ghosts.
+Same analysis, returned in memory with nothing written to disk.
 
-**Parameters:**
+**Returns:** a 2-tuple `(ghost_img, analysis)`
 
-- `image_path` (str): Path to the image
-- `quality_steps` (tuple): Quality levels to test
-
-**Returns:**
-
-- `ghost_img` (PIL.Image): Ghost visualization
-- `analysis` (dict): Detected compression levels
+- `ghost_img` (PIL.Image or None): Combined ghost visualization
+- `analysis` (dict): `difference_scores`, `estimated_last_save_quality`,
+  `quality_confidence`, `warnings`, `interpretation`
 
 ---
 
@@ -172,48 +192,52 @@ Detects JPEG compression ghosts.
 
 #### `analyze_quantization_table(image_path)`
 
-Analyzes JPEG quantization tables.
+Analyzes JPEG quantization tables. Returns `status: "not_jpeg"` for non-JPEG
+input.
 
-**Parameters:**
+**Returns:** `analysis` (dict)
 
-- `image_path` (str): Path to JPEG image
+- `status`, `format`, `image_size`, `warnings`, `interpretation`
+- `quantization_tables`: `{"table_<id>": {table_values, min_value, max_value,
+  mean_value, estimated_quality, table_size}}`
 
-**Returns:**
-
-- `analysis` (dict): Quantization table analysis
-  - `tables`: Extracted Q-tables
-  - `anomalies`: Detected irregularities
-  - `likely_quality`: Estimated original quality
+`estimate_jpeg_quality(qtable, table_id=0)` inverts the IJG scaling and
+recovers the original save quality to within ~1 point.
+`is_standard_table(qtable, table_id=0)` reports whether the table is a scaled
+copy of the standard IJG table, which distinguishes camera output from
+custom encoder tables.
 
 ---
 
 ### 7. Copy-Move Forgery Detection (`cmfd.py`)
 
-#### `detect_copy_move(image_path, block_size=32, threshold=100)`
+#### `detect_copy_move(image_path, block_size=16, threshold=0.99, min_distance=50)`
 
-Detects copied and moved regions.
+Detects copied and moved regions using DCT block matching. Features exclude the
+DC coefficient, so matching is on texture rather than average brightness.
 
 **Parameters:**
 
-- `image_path` (str): Path to the image
-- `block_size` (int): Block size for matching (default: 32)
-- `threshold` (int): Similarity threshold (default: 100)
+- `block_size` (int): Block size for matching (default: 16)
+- `threshold` (float): Cosine similarity, 0-1 (default: 0.99). Genuine clones
+  sit near 1.0; below ~0.97 almost everything matches.
+- `min_distance` (int): Minimum separation between matched blocks
 
-**Returns:**
+**Returns:** `result` (dict)
 
-- `result` (dict): Detection results
-  - `duplicates_found` (bool): Whether duplicates detected
-  - `regions` (list): List of matched regions
-  - `confidence` (float): Detection confidence
+- `status`, `method`, `parameters`, `warnings`, `interpretation`
+- `results`: `total_blocks_analyzed`, `matches_found`, `match_groups`,
+  `result_image_path`
+- `matches`: top 20 matches, each with `block1`, `block2`, `similarity`, `distance`
 
 **Example:**
 
 ```python
 from analysis import cmfd
 
-result = cmfd.detect_copy_move("image.jpg", block_size=16)
-if result['duplicates_found']:
-    print(f"Found {len(result['regions'])} duplicate regions")
+result = cmfd.detect_copy_move("image.jpg")
+if result['results']['matches_found'] > 0:
+    print(f"Found {result['results']['matches_found']} duplicate blocks")
 ```
 
 ---
@@ -222,19 +246,15 @@ if result['duplicates_found']:
 
 #### `analyze_prnu(image_path, reference_image_path=None)`
 
-Analyzes Photo Response Non-Uniformity.
+Analyzes Photo Response Non-Uniformity (sensor fingerprint).
 
-**Parameters:**
+**Returns:** `analysis` (dict)
 
-- `image_path` (str): Path to test image
-- `reference_image_path` (str, optional): Reference from same camera
-
-**Returns:**
-
-- `analysis` (dict): PRNU metrics
-  - `noise_residual_variance`: PRNU strength
-  - `correlation`: Correlation with reference (if provided)
-  - `camera_match`: Boolean indicating likely same camera
+- `status`, `method`, `image_shape`, `warnings`, `interpretation`
+- `metrics`: `prnu_variance`, `prnu_mean`, `prnu_std`, `pattern_strength`,
+  `variance_consistency`, `blocks_analyzed`
+- `reference_analysis` (only when a reference is supplied): `correlation`,
+  `same_camera_likelihood`, `interpretation`
 
 ---
 
@@ -242,26 +262,37 @@ Analyzes Photo Response Non-Uniformity.
 
 #### `analyze_frequency_domain(image_path)`
 
-Performs FFT analysis for tampering detection.
+FFT analysis for tampering detection.
 
-**Parameters:**
+**Returns:** `analysis` (dict)
 
-- `image_path` (str): Path to the image
+- `status`, `method`, `authenticity_score` (0-100), `risk_level`, `verdict`,
+  `findings`, `warnings`, `magnitude_spectrum_path`, `interpretation`
+- `metrics`: `high_frequency_energy_percentage` (power above half-Nyquist),
+  `spectral_power_law_slope` (near -2.0 for natural photographs),
+  `spectral_complexity`
+- `technical_details`: `magnitude_mean`, `magnitude_std`, `phase_std`,
+  `frequency_uniformity`, `peaks_detected`
 
-**Returns:**
-
-- `analysis` (dict): Frequency domain metrics
-  - `magnitude_spectrum`: FFT magnitude stats
-  - `phase_consistency`: Phase uniformity metric
-  - `anomaly_score`: Tampering likelihood
+`phase_std` and `frequency_uniformity` are reported but not scored: both are
+effectively constant across images.
 
 #### `detect_dct_anomalies(image_path)`
 
-Analyzes DCT coefficients for irregularities.
+Analyzes DCT coefficients and JPEG grid artifacts.
 
-**Returns:**
+**Returns:** `analysis` (dict)
 
-- `anomalies` (dict): DCT anomaly metrics
+- `status`, `method`, `authenticity_score`, `risk_level`, `verdict`,
+  `findings`, `warnings`, `anomalies`, `dct_anomaly_map_path`, `interpretation`
+- `metrics`: `smooth_content_percentage`, `detail_content_percentage`,
+  `noise_edge_percentage`, `jpeg_blockiness_ratio`,
+  `compression_quality_indicator`
+- `technical_details`: includes `grid_consistency`, the blockiness ratio where
+  1.0 means no visible 8x8 grid
+
+Helpers `radial_power_slope(magnitude_spectrum)` and `jpeg_blockiness(gray)`
+are exposed for direct use.
 
 ---
 
@@ -271,24 +302,24 @@ Analyzes DCT coefficients for irregularities.
 
 Detects common GAN/deepfake artifacts.
 
-**Parameters:**
+**Returns:** `analysis` (dict)
 
-- `image_path` (str): Path to the image
-
-**Returns:**
-
-- `analysis` (dict): Deepfake detection results
-  - `artifacts`: Dictionary of detected artifacts
-  - `likelihood`: "low", "medium", or "high"
-  - `confidence`: 0.0-1.0 confidence score
+- `status` (`"analysis_complete"`), `method`, `image_size`, `interpretation`, `note`
+- `artifacts`: `frequency_anomaly_score`, `channel_correlation_score`,
+  `edge_sharpness_score`
 
 #### `detect_gan_fingerprint(image_path)`
 
-Detects specific GAN architecture fingerprints.
+Detects GAN architecture fingerprints via spectral analysis.
 
-**Returns:**
+**Returns:** `fingerprint` (dict)
 
-- `fingerprint` (dict): GAN fingerprint analysis
+- `status`, `method`, `radial_profile`, `gan_indicators`,
+  `gan_likelihood` (`"Low"`/`"Medium"`/`"High"`), `interpretation`, `note`
+- `metrics`: `radial_frequency_variance`, `spectral_peaks_detected`,
+  `quadrant_symmetry`, `gan_score`
+
+Both are heuristic detectors; reliable deepfake detection needs a trained model.
 
 ---
 
@@ -298,25 +329,74 @@ Detects specific GAN architecture fingerprints.
 
 Detects image resampling artifacts.
 
-**Parameters:**
+**Returns:** `analysis` (dict)
 
-- `image_path` (str): Path to the image
-
-**Returns:**
-
-- `analysis` (dict): Resampling detection results
-  - `resampling_score`: 0.0-1.0 likelihood
-  - `interpretation`: Human-readable result
+- `status` (`"analysis_complete"`), `method`, `image_size`,
+  `resampling_score` (0.0-1.0), `artifacts_detected`, `interpretation`
 
 #### `detect_interpolation_method(image_path)`
 
-Identifies interpolation method used.
+Identifies the interpolation method used.
 
-**Returns:**
+**Returns:** `method` (dict)
 
-- `method` (dict): Detected interpolation method
-  - `likely_method`: "nearest", "bilinear", or "bicubic"
-  - `confidence`: Detection confidence
+- `status`, `method`, `gradient_std`, `ringing_score`,
+  `likely_interpolation`, `confidence`
+
+---
+
+### 12. Steganography Detection (`steganography_detection.py`)
+
+#### `detect_lsb_steganography(image_path)`
+
+Detects LSB steganography using the Westfeld-Pfitzmann Pair-of-Values
+chi-square attack, gated on the LSB plane also being spatially random.
+
+**Returns:** a 3-tuple `(probability, visual_map, details)`
+
+- `probability` (float): 0-100, the strongest channel
+- `visual_map` (PIL.Image or None): Per-channel block heatmaps
+- `details` (dict): `overall_probability`, `mean_channel_probability`,
+  `channel_results` (per channel: `chi_square_statistic`, `p_value`,
+  `steganography_probability`, `pov_probability_before_gate`,
+  `lsb_randomness_z`, `lsb_plane_is_random`, `valid_pairs`,
+  `lsb_distribution`), `image_info`, `method`, `interpretation`
+
+Detection scales with how much LSB capacity is used: a fully embedded image
+scores ~100, a 50% embed ~20, and sparse embedding is invisible to the
+whole-image test — use the block heatmap for that. The heatmap is a
+localisation aid, not a verdict; it retains a measurable false positive rate on
+JPEG-sourced images.
+
+`pov_chi_square_test(channel)` and `lsb_spatial_randomness_z(channel)` are
+exposed individually, as are `extract_lsb_planes()`, `analyze_blocks()` and
+`batch_detect()`.
+
+---
+
+### 13. Hash Verification (`hash_verification.py`)
+
+#### `verify_image_provenance(image_path, db_path=DEFAULT_DB_PATH)`
+
+Verifies provenance against the local hash ledger.
+
+**Returns:** a 4-tuple `(authenticity_score, modification_history, legal_validity, details)`
+
+- `authenticity_score` (int): 0-100 (100 exact match, 50 no record)
+- `modification_history` (list): Chronological match records
+- `legal_validity` (dict): `valid`, `reason`, `chain_of_custody`, `admissible`
+- `details` (dict): `current_hashes`, `matches_found`, `match_details`,
+  `image_info`, `database_path`, `analysis_timestamp`
+
+#### Other functions
+
+`generate_perceptual_hash()` (phash/ahash/dhash/whash),
+`generate_cryptographic_hash()` (SHA-256), `add_to_blockchain()`,
+`find_matches()`, `calculate_hash_distance()`, `export_database()`,
+`import_database()` and `get_database_stats()`.
+
+The ledger is a JSON file, not a distributed blockchain; `DEFAULT_DB_PATH`
+resolves relative to the project root.
 
 ---
 
@@ -342,33 +422,24 @@ Returns basic image properties.
 
 ## Error Handling
 
-All functions use consistent error handling:
+Modules do not raise on bad input; they report failure in the return value so a
+caller can render it. Check the return shape for the function you called:
 
 ```python
-try:
-    result = analysis_function(image_path)
-except FileNotFoundError:
-    return {"error": "File not found"}
-except Exception as e:
-    return {"error": str(e), "status": "analysis_failed"}
-```
+from analysis import histogram_analysis, ela
 
-Always check for `"error"` key in returned dictionaries.
+result = histogram_analysis.generate_histogram("missing.jpg")
+if result["status"] != "success":
+    print(f"Error: {result['error']}")
+
+ela_img, overlay, metrics = ela.perform_ela("missing.jpg")
+if ela_img is None:
+    print("ELA failed")
+```
 
 ---
 
 ## Common Patterns
-
-### Checking for Errors
-
-```python
-result = ela.perform_ela("image.jpg")
-if "error" in result:
-    print(f"Error: {result['error']}")
-else:
-    # Process result
-    pass
-```
 
 ### Batch Processing
 
@@ -376,23 +447,24 @@ else:
 from pathlib import Path
 from analysis import ela
 
-images = Path("images/").glob("*.jpg")
 results = {}
-
-for img in images:
-    ela_img, overlay, metrics = ela.perform_ela(str(img))
-    results[img.name] = metrics
+for img in Path("images/").glob("*.jpg"):
+    _, _, metrics = ela.perform_ela(str(img))
+    if metrics is not None:
+        results[img.name] = metrics
 ```
 
 ---
 
 ## Performance Tips
 
-1. **Resize large images** before analysis using `util.resize_image()`
+1. **Resize large images** before analysis using `util.resize_image()`. The app
+   caps analysis input at 2048px for this reason — but note that the
+   steganography, resampling and JPEG ghost modules must see the *original*
+   file, since resizing destroys the very artifacts they measure.
 2. **Use grayscale** for algorithms that don't need color
 3. **Cache results** to avoid reprocessing
-4. **Process in batches** for multiple images
-5. **Use multiprocessing** for independent analyses
+4. **Use multiprocessing** for independent analyses
 
 ---
 

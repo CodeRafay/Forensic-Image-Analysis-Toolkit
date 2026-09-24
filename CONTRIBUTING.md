@@ -115,8 +115,11 @@ Branch naming conventions:
 ### 3. Run Tests
 
 ```bash
-# Run all tests
+# Run all tests (pytest.ini applies a 70% coverage floor)
 pytest
+
+# Pass/fail only, without the coverage gate
+pytest --no-cov
 
 # Run specific test file
 pytest tests/test_ela.py
@@ -127,6 +130,9 @@ pytest --cov=analysis
 # Run integration tests only
 pytest -m integration
 ```
+
+`pytest` and the other dev tools come from `requirements-dev.txt`, not
+`requirements.txt` — install it first or the suite will not run.
 
 ### 4. Format Code
 
@@ -178,11 +184,14 @@ def test_ela_detects_manipulated_region():
     img_path = create_test_image_with_edit()
 
     # Act
-    result = perform_ela(img_path)
+    ela_img, overlay, metrics = perform_ela(img_path)
 
     # Assert
-    assert result['metrics']['mean_error'] > threshold
+    assert metrics['mean_error'] > threshold
 ```
+
+Note `perform_ela` returns a 3-tuple, not a dict. Check `docs/API.md` for the
+return shape of the function you are testing — several return tuples.
 
 ### Test Categories
 
@@ -404,6 +413,9 @@ Add screenshots for UI changes
    - Add to README.md feature list
    - Document in docs/API.md
    - Explain in docs/TECHNIQUES.md
+   - Add `Descriptions/<Technique>.md` and register it in `TECHNIQUES` in
+     `app.py` — this file is rendered in the app sidebar, so it must describe
+     what the code actually does, including the direction of any score
 
 5. **Update requirements.txt** if new dependencies added
 
@@ -415,8 +427,19 @@ Add screenshots for UI changes
 - [ ] README.md updated
 - [ ] API.md documentation added
 - [ ] TECHNIQUES.md explanation added
+- [ ] `Descriptions/<Technique>.md` added and wired into the sidebar
 - [ ] Example usage provided
 - [ ] Performance considerations documented
+
+### A Note on Metrics
+
+If a metric feeds a scoring branch, **verify it actually varies with the thing
+it measures** before relying on it. Several metrics in this project were found
+to be constant across all inputs — one was mathematically fixed at 1.814 for
+every image — which left their branches unreachable and every image scoring the
+same. Measure a metric on a clean image, a manipulated one, and a synthetic
+extreme, and add a regression test asserting the difference. See
+`TestMetricsRespondToInput` in `tests/test_integration.py`.
 
 ---
 
@@ -469,7 +492,10 @@ VeritasForensics/
 ├── tests/              # Test suite
 │   ├── test_ela.py
 │   ├── test_metadata.py
+│   ├── test_hash_verification.py
+│   ├── test_steganography_detection.py
 │   └── test_integration.py
+├── Descriptions/       # Per-technique guides rendered in the app sidebar
 ├── docs/               # Documentation
 │   ├── API.md
 │   ├── TECHNIQUES.md

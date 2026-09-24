@@ -18,9 +18,13 @@ class TestELA(unittest.TestCase):
         cls.test_dir = Path(__file__).parent / "test_images"
         cls.test_dir.mkdir(exist_ok=True)
 
-        # Create a simple test image
+        # Textured content, not a flat fill: a flat image compresses perfectly
+        # and yields exactly 0 error at every quality, which makes the
+        # quality-comparison assertions vacuous.
         cls.test_image = cls.test_dir / "test.jpg"
-        img = Image.new('RGB', (100, 100), color=(128, 128, 128))
+        sample = (Path(__file__).parent.parent /
+                  "assets" / "sample images" / "sampleImg.jpeg")
+        img = Image.open(sample).convert('RGB').resize((100, 100))
         img.save(cls.test_image, 'JPEG', quality=95)
 
     @classmethod
@@ -62,10 +66,14 @@ class TestELA(unittest.TestCase):
         """Test ELA metrics are present"""
         _, _, metrics = ela.perform_ela(str(self.test_image))
 
-        required_keys = ['mean_error', 'max_error', 'std_error']
+        required_keys = ['mean_error', 'max_error', 'std_error',
+                         'anomaly_score', 'suspicious_areas_percent']
         for key in required_keys:
             self.assertIn(key, metrics)
             self.assertIsInstance(metrics[key], (int, float))
+
+        self.assertGreaterEqual(metrics['suspicious_areas_percent'], 0.0)
+        self.assertLessEqual(metrics['suspicious_areas_percent'], 100.0)
 
     def test_ela_with_invalid_path(self):
         """Test ELA with non-existent file"""

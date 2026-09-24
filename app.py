@@ -903,7 +903,10 @@ if file_path is not None:
                     "Block Size", 8, 32, 16, 4, help="Size of blocks for matching (larger = faster but less precise)")
             with col_p2:
                 threshold = st.slider(
-                    "Similarity Threshold", 0.5, 0.99, 0.9, 0.05, help="Higher = stricter matching")
+                    "Similarity Threshold", 0.95, 0.999, 0.99, 0.005,
+                    help="Higher = stricter matching. Blocks are compared on texture only, "
+                         "so genuine clones sit near 1.0 and anything below ~0.97 matches "
+                         "almost everything.")
 
         if st.button("🚀 Run CMFD Analysis", type="primary"):
             with st.spinner("Analyzing for copy-move forgery... This may take a minute..."):
@@ -1184,34 +1187,29 @@ if file_path is not None:
 
                         with col_m1:
                             detail_pct = metrics['high_frequency_energy_percentage']
-                            st.metric("Fine Details", f"{detail_pct:.1f}%")
-                            if detail_pct < 10:
+                            st.metric("Fine Details", f"{detail_pct:.2f}%")
+                            if detail_pct < 0.2:
                                 st.caption("🔵 Low (smooth image)")
-                            elif detail_pct < 30:
+                            elif detail_pct <= 3.0:
                                 st.caption("🟢 Normal range")
                             else:
-                                st.caption("🟡 High (very sharp)")
+                                st.caption("🟡 High (very sharp or noisy)")
 
                         with col_m2:
-                            consistency = metrics['phase_consistency_score']
-                            st.metric("Pattern Consistency",
-                                      f"{consistency:.1f}/10")
-                            if consistency >= 8:
-                                st.caption("🟢 Highly consistent")
-                            elif consistency >= 6:
-                                st.caption("🟡 Moderately consistent")
+                            slope = metrics['spectral_power_law_slope']
+                            st.metric("Spectrum Slope", f"{slope:.2f}")
+                            if -3.0 <= slope <= -1.5:
+                                st.caption("🟢 Natural 1/f² falloff")
+                            elif slope < -3.0:
+                                st.caption("🟡 Too steep (blur/upscale)")
                             else:
-                                st.caption("🔴 Inconsistent patterns")
+                                st.caption("🔴 Too flat (noise/sharpening)")
 
                         with col_m3:
-                            uniformity = metrics['frequency_uniformity']
-                            st.metric("Distribution", f"{uniformity:.2f}")
-                            if uniformity < 2.0:
-                                st.caption("🟢 Natural spread")
-                            elif uniformity < 3.5:
-                                st.caption("🟡 Slightly irregular")
-                            else:
-                                st.caption("🔴 Unusual patterns")
+                            complexity = metrics['spectral_complexity']
+                            st.metric("Spectral Complexity",
+                                      f"{complexity:.2f}")
+                            st.caption("Spread of frequency magnitudes")
 
                         # Findings
                         st.markdown("---")
@@ -1346,15 +1344,14 @@ if file_path is not None:
                         col_q1, col_q2 = st.columns(2)
 
                         with col_q1:
-                            block_score = metrics['block_consistency_score']
-                            st.metric("Block Consistency",
-                                      f"{block_score:.1f}/10")
-                            if block_score >= 8:
-                                st.caption("🟢 Highly consistent")
-                            elif block_score >= 5:
-                                st.caption("🟡 Some variations")
+                            blockiness = metrics['jpeg_blockiness_ratio']
+                            st.metric("JPEG Blockiness", f"{blockiness:.2f}×")
+                            if blockiness < 1.10:
+                                st.caption("🟢 No visible 8×8 grid")
+                            elif blockiness < 1.30:
+                                st.caption("🟡 Mild blocking")
                             else:
-                                st.caption("🔴 Inconsistent blocks")
+                                st.caption("🔴 Strong grid artifacts")
 
                         with col_q2:
                             comp_quality = metrics['compression_quality_indicator']

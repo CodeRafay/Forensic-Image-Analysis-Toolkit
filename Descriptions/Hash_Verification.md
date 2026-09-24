@@ -13,19 +13,27 @@ Think of it like DNA testing:
 
 ## What is Blockchain-Based Provenance?
 
-**Provenance** means the history of ownership and modifications of an image. Our blockchain simulation:
+**Provenance** means the history of ownership and modifications of an image. Our
+ledger:
 
 - **Records every registered image** with timestamps
-- **Creates an immutable audit trail** (like a notary's ledger)
+- **Creates an append-only audit trail** (like a notary's ledger)
 - **Tracks the chain of custody** for legal validity
 - **Detects unauthorized modifications** by comparing hashes
+
+> ⚠️ **"Blockchain" here is a simulation, and the ledger itself is not
+> tamper-evident.** Records are stored in a plain JSON file with no hash
+> linking between them and no integrity check over the file. Editing a stored
+> hash by hand goes completely undetected. What the module genuinely proves is
+> that *an image* matches *a record* — it cannot prove the record was not
+> altered. See Limitations below.
 
 ### How It Works:
 
 ```
-Original Image → Generate Hashes → Store in "Blockchain" → Verify Later
+Original Image → Generate Hashes → Store in ledger → Verify Later
                                           ↓
-                     Timestamp + Hashes + Metadata (immutable record)
+                     Timestamp + Hashes + Metadata (one JSON record)
 ```
 
 When you later verify an image, it compares current hashes with stored records to determine authenticity.
@@ -210,9 +218,10 @@ Image File → SHA-256 → Cryptographic Hash (exact)
 - **Lower distance** = More similar images
 - **Threshold**: Typically 10 bits for "similar" classification
 
-### Blockchain Simulation:
+### Ledger Simulation:
 - **JSON-based storage**: Simple, portable database
-- **Immutable records**: Each entry timestamped
+- **Append-only by convention**: Each entry timestamped, but the file is
+  editable and nothing detects edits
 - **Chronological ordering**: Establishes timeline
 - **Metadata included**: Full context for each image
 

@@ -21,6 +21,9 @@ def detect_deepfake_artifacts(image_path):
         img_array = np.array(img, dtype=np.float32)
         img.close()
 
+        # Capture the shape now — img_array is freed before the result is built
+        image_shape = img_array.shape
+
         # Check for common GAN artifacts
         # 1. Frequency anomalies (GANs produce artifacts in specific frequency bands)
         from scipy.fft import fft2, fftshift
@@ -71,7 +74,7 @@ def detect_deepfake_artifacts(image_path):
         result = {
             "status": "analysis_complete",
             "method": "GAN/Deepfake Artifact Detection",
-            "image_size": img_array.shape,
+            "image_size": image_shape,
             "artifacts": {
                 "frequency_anomaly_score": float(high_freq_variance),
                 "channel_correlation_score": float(avg_channel_correlation),

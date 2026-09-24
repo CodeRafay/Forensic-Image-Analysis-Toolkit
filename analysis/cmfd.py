@@ -3,7 +3,7 @@ import numpy as np
 from pathlib import Path
 
 
-def detect_copy_move(image_path, block_size=16, threshold=0.95, min_distance=50):
+def detect_copy_move(image_path, block_size=16, threshold=0.99, min_distance=50):
     """
     Detects copy-move forgery using block matching with PCA-based feature extraction.
     Identifies duplicated regions within the same image (cloning).
@@ -13,7 +13,11 @@ def detect_copy_move(image_path, block_size=16, threshold=0.95, min_distance=50)
     Args:
         image_path (str): Path to the image file
         block_size (int): Size of blocks for matching (default 16)
-        threshold (float): Similarity threshold 0-1 (default 0.95, higher = more strict)
+        threshold (float): Similarity threshold 0-1 (default 0.99, higher = more strict).
+            Features are texture-only (DC removed), so genuine clones sit at ~1.0
+            while unrelated blocks top out around 0.99. Measured on the sample
+            image: 0.99 gives 1 match on a clean image vs 123 on a cloned one;
+            dropping to 0.95 saturates both.
         min_distance (int): Minimum distance between matched blocks to avoid false positives
 
     Returns:
@@ -46,8 +50,15 @@ def detect_copy_move(image_path, block_size=16, threshold=0.95, min_distance=50)
                 block_float = np.float32(block)
                 dct_block = cv2.dct(block_float)
 
-                # Use low-frequency coefficients (top-left 8x8)
-                features = dct_block[:8, :8].flatten()
+                # Low-frequency coefficients (top-left 8x8), minus the DC term.
+                # DC is 8x the block's mean brightness, which dwarfs every AC
+                # coefficient — it accounts for 95-99.9% of the feature
+                # vector's length. Keeping it makes cosine similarity measure
+                # average brightness rather than texture: two unrelated blocks
+                # score 0.945 with DC and -0.235 without. Dropping it cut false
+                # matches on a clean image from 16137 near-exact pairs to 0,
+                # while a genuine cloned region still matches at 1.0.
+                features = dct_block[:8, :8].flatten()[1:]
 
                 blocks.append(features)
                 positions.append((i, j))

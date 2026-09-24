@@ -84,8 +84,9 @@ Veritas Forensic Image Analysis Toolkit is a comprehensive, production-ready for
 
    - 2D FFT for tampering detection
    - DCT anomaly detection
-   - Phase consistency analysis
-   - High-frequency variance measurement
+   - Radial power-law slope (natural images follow 1/f², slope ≈ -2.0)
+   - JPEG blockiness ratio (edge strength on the 8×8 grid vs. elsewhere)
+   - High-frequency power measurement
 
 10. **Deepfake Detection** - `analysis/deepfake_detector.py`
 

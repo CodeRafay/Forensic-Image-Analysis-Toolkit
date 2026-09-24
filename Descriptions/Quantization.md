@@ -13,10 +13,18 @@ Think of it like a **fingerprint of the compression process**:
 ## What Does Quantization Table Analysis Measure?
 
 - **Quantization matrix values** (8×8 grid of compression coefficients)
-- **Quality estimation** (approximate JPEG quality level: 0-100)
+- **Quality estimation** (JPEG quality level 1-100, recovered by inverting the
+  standard IJG scaling formula — accurate to within about 1 point)
 - **Compression history** (single vs. double compression)
 - **Software signatures** (identifies camera/editor used)
-- **Table consistency** (does the table match claimed source?)
+- **Table consistency** — whether the table is a scaled copy of the standard
+  IJG table, which is what cameras and ordinary encoders produce. Editors with
+  hand-tuned tables break that proportionality and are flagged.
+
+> Tables are read through the JPEG decoder's own marker parsing. Scanning the
+> raw file for the DQT marker byte-pair does not work: those two bytes also
+> occur inside compressed image data and inside XMP metadata, which produces a
+> dozen or more imaginary "tables" built from unrelated bytes.
 
 ## How to Interpret Results
 

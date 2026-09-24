@@ -20,8 +20,11 @@ from datetime import datetime
 from pathlib import Path
 
 
-# Default database location — directory created lazily on first write
-_TEMP_DIR = "temp"
+# Default database location — directory created lazily on first write.
+# Anchored to the project root rather than the CWD so the ledger does not move
+# depending on where the app was launched from; every other module resolves its
+# temp directory the same way.
+_TEMP_DIR = str(Path(__file__).resolve().parent.parent / "temp")
 DEFAULT_DB_PATH = os.path.join(_TEMP_DIR, "hash_database.json")
 
 
@@ -132,16 +135,109 @@ def save_database(database, db_path=DEFAULT_DB_PATH):
         json.dump(database, f, indent=2)
 
 
+# Hash of the (non-existent) block before the first one
+GENESIS_HASH = "0" * 64
+
+# Fields excluded from a record's own hash: record_hash is the output itself,
+# and chain_valid is a verification annotation added at read time.
+_UNHASHED_FIELDS = ("record_hash", "chain_valid")
+
+
+def compute_record_hash(record, prev_hash):
+    """
+    Compute a record's block hash: SHA-256 over its content plus its
+    predecessor's hash.
+
+    Linking each record to the previous one is what makes the ledger
+    tamper-evident. Editing any field of any record changes that record's hash,
+    which breaks every hash after it, so a single edit invalidates the whole
+    tail of the chain rather than passing silently.
+
+    Args:
+        record (dict): The record to hash
+        prev_hash (str): Preceding record's `record_hash`
+
+    Returns:
+        str: SHA-256 hex digest
+    """
+    payload = {k: v for k, v in record.items() if k not in _UNHASHED_FIELDS}
+    payload["prev_hash"] = prev_hash
+
+    # sort_keys makes the serialization canonical, so the same content always
+    # hashes the same regardless of dict insertion order
+    canonical = json.dumps(payload, sort_keys=True,
+                           separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def verify_chain(db_path=DEFAULT_DB_PATH):
+    """
+    Walk the ledger and verify every link.
+
+    Returns:
+        dict: {
+            'valid': bool,              # whole chain intact
+            'total_records': int,
+            'first_invalid_index': int or None,
+            'errors': list of str,
+            'legacy_records': int       # records predating chaining
+        }
+    """
+    database = load_database(db_path)
+    records = database.get("records", [])
+
+    errors = []
+    first_invalid = None
+    legacy = 0
+    prev_hash = GENESIS_HASH
+
+    for index, record in enumerate(records):
+        stored = record.get("record_hash")
+
+        if stored is None:
+            # Written before chaining existed; cannot be verified either way
+            legacy += 1
+            prev_hash = GENESIS_HASH if index == 0 else prev_hash
+            continue
+
+        if record.get("prev_hash") != prev_hash:
+            errors.append(
+                f"Record {index} ({record.get('filename', '?')}): broken link - "
+                f"expected prev_hash {prev_hash[:12]}..., "
+                f"found {str(record.get('prev_hash'))[:12]}...")
+            first_invalid = index if first_invalid is None else first_invalid
+
+        recomputed = compute_record_hash(record, record.get("prev_hash", ""))
+        if recomputed != stored:
+            errors.append(
+                f"Record {index} ({record.get('filename', '?')}): content has been "
+                f"altered since it was recorded")
+            first_invalid = index if first_invalid is None else first_invalid
+
+        prev_hash = stored
+
+    return {
+        "valid": not errors,
+        "total_records": len(records),
+        "first_invalid_index": first_invalid,
+        "errors": errors,
+        "legacy_records": legacy,
+    }
+
+
 def add_to_blockchain(image_path, db_path=DEFAULT_DB_PATH):
     """
-    Add image record to simulated blockchain.
+    Append an image record to the hash chain.
+
+    Each record stores the previous record's hash and its own, so any later
+    edit to the ledger is detectable via verify_chain().
 
     Args:
         image_path (str): Path to image file
         db_path (str): Path to database file
 
     Returns:
-        dict: Record added to blockchain
+        dict: Record appended to the chain
     """
     # Generate hashes
     perceptual_hashes = generate_perceptual_hash(image_path)
@@ -150,21 +246,32 @@ def add_to_blockchain(image_path, db_path=DEFAULT_DB_PATH):
     # Load database
     database = load_database(db_path)
 
-    # Create record
+    # Derive the id from the highest existing one rather than the record
+    # count: import_database() merges records in, so a count-based id
+    # collides with an imported record after any merge.
+    next_id = max((r.get('id', -1)
+                   for r in database['records']), default=-1) + 1
+
+    prev_hash = (database['records'][-1].get('record_hash', GENESIS_HASH)
+                 if database['records'] else GENESIS_HASH)
+
     record = {
-        'id': len(database['records']),
+        'id': next_id,
         'filename': os.path.basename(image_path),
         'timestamp': datetime.now().isoformat(),
         'perceptual_hashes': perceptual_hashes,
         'sha256': crypto_hash,
         'file_size': os.path.getsize(image_path),
-        'image_info': _get_image_info(image_path)
+        'image_info': _get_image_info(image_path),
+        'prev_hash': prev_hash,
     }
+    record['record_hash'] = compute_record_hash(record, prev_hash)
 
-    # Add to blockchain
+    # Append to the chain
     database['records'].append(record)
     database['metadata']['last_updated'] = datetime.now().isoformat()
     database['metadata']['total_records'] = len(database['records'])
+    database['metadata']['chain_head'] = record['record_hash']
 
     # Save database
     save_database(database, db_path)
@@ -293,8 +400,12 @@ def verify_image_provenance(image_path, db_path=DEFAULT_DB_PATH):
         # Build modification history
         modification_history = _build_modification_history(matches)
 
+        # The ledger only proves anything if it has not itself been edited
+        chain_status = verify_chain(db_path)
+
         # Assess legal validity
-        legal_validity = _assess_legal_validity(matches, authenticity_score)
+        legal_validity = _assess_legal_validity(
+            matches, authenticity_score, chain_status)
 
         # Compile detailed results
         detailed_results = {
@@ -306,6 +417,7 @@ def verify_image_provenance(image_path, db_path=DEFAULT_DB_PATH):
             'match_details': matches[:5],  # Top 5 matches
             'image_info': _get_image_info(image_path),
             'database_path': db_path,
+            'chain_integrity': chain_status,
             'analysis_timestamp': datetime.now().isoformat()
         }
 
@@ -335,18 +447,19 @@ def _calculate_authenticity_score(matches, crypto_hash):
     if best_match['match_type'] == 'exact':
         # Exact match found - very high authenticity
         return 100
-    elif best_match['similarity'] >= 95:
-        # Very close match - likely minor modification
-        return 85
-    elif best_match['similarity'] >= 85:
-        # Close match - moderate modification
-        return 70
-    elif best_match['similarity'] >= 70:
-        # Partial match - significant modification
-        return 55
-    else:
-        # Low similarity - possibly different image
-        return 40
+
+    # Perceptual match. find_matches only returns hits within its Hamming
+    # threshold, so with the default (10 of 64 bits) similarity cannot fall
+    # below 84.4%; bands under that are unreachable at default settings but
+    # are kept because the threshold is caller-configurable.
+    similarity = best_match['similarity']
+    if similarity >= 95:
+        return 85      # Very close - likely minor modification
+    if similarity >= 85:
+        return 70      # Close - moderate modification
+    if similarity >= 70:
+        return 55      # Partial - significant modification
+    return 40          # Low similarity - possibly a different image
 
 
 def _build_modification_history(matches):
@@ -377,17 +490,34 @@ def _build_modification_history(matches):
     return history
 
 
-def _assess_legal_validity(matches, authenticity_score):
+def _assess_legal_validity(matches, authenticity_score, chain_status=None):
     """
     Assess legal validity based on chain of custody.
+
+    Two independent things must hold: the image must match a record, and the
+    ledger holding that record must not itself have been tampered with. A match
+    against an altered ledger proves nothing, so a broken chain overrides any
+    match result.
 
     Args:
         matches (list): List of matching records
         authenticity_score (int): Calculated authenticity score
+        chain_status (dict): Result of verify_chain()
 
     Returns:
         dict: Legal validity assessment
     """
+    # A tampered ledger invalidates everything built on it
+    if chain_status is not None and not chain_status['valid']:
+        return {
+            'valid': False,
+            'reason': 'Ledger integrity check failed - records have been altered',
+            'chain_of_custody': 'Compromised',
+            'admissible': False,
+            'confidence': 'None',
+            'chain_errors': chain_status['errors'][:5],
+        }
+
     if not matches:
         return {
             'valid': False,
@@ -396,15 +526,20 @@ def _assess_legal_validity(matches, authenticity_score):
             'admissible': False
         }
 
+    # Records written before chaining existed can't be vouched for
+    unverifiable = bool(chain_status and chain_status['legacy_records'])
+
     best_match = matches[0]
 
     if best_match['match_type'] == 'exact':
         return {
             'valid': True,
-            'reason': 'Exact cryptographic match found',
-            'chain_of_custody': 'Intact',
+            'reason': 'Exact cryptographic match found'
+                      + (' (ledger contains unchained legacy records)'
+                         if unverifiable else ''),
+            'chain_of_custody': 'Intact' if not unverifiable else 'Partially verifiable',
             'admissible': True,
-            'confidence': 'High'
+            'confidence': 'High' if not unverifiable else 'Medium',
         }
     elif authenticity_score >= 85:
         return {

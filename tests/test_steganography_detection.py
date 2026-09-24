@@ -19,21 +19,35 @@ class TestSteganographyDetection(unittest.TestCase):
         cls.test_dir = Path(__file__).parent / "test_images"
         cls.test_dir.mkdir(exist_ok=True)
 
-        # Create a simple test image
-        cls.test_image = cls.test_dir / "test_stego.jpg"
-        img = Image.new('RGB', (200, 200), color=(128, 128, 128))
-        img.save(cls.test_image, 'JPEG', quality=95)
+        # Use real photographic content. The PoV test keys off histograms
+        # being *lumpy*, which is true of photographs but not of synthetic
+        # gradients: a smooth ramp plus Gaussian noise has a locally linear
+        # histogram, so its PoV pairs are already equal and it reads as
+        # embedded even when clean. A flat colour image is worse still — one
+        # populated value, nothing to test.
+        sample = (Path(__file__).parent.parent /
+                  "assets" / "sample images" / "sampleImg.jpeg")
+        if not sample.exists():
+            raise unittest.SkipTest(f"sample image missing: {sample}")
 
-        # Create an image with modified LSB (simulated steganography)
+        base = np.array(Image.open(sample).convert('RGB'))
+
+        # Clean reference: no embedding. Saved as PNG so the round-trip is
+        # lossless — re-encoding as JPEG would rewrite every LSB.
+        cls.test_image = cls.test_dir / "test_stego.png"
+        Image.fromarray(base).save(cls.test_image, 'PNG')
+        cls.clean_array = base
+
+        # Steganographic image: LSBs replaced with random data, which is what
+        # real LSB embedding does. Forcing LSBs to 1 (the previous fixture)
+        # makes the plane maximally lopsided — the opposite of the signature.
+        rng = np.random.default_rng(1234)
+        stego = base.copy()
+        flat = stego.reshape(-1)
+        flat[:] = (flat & 0xFE) | rng.integers(
+            0, 2, flat.size, dtype=np.uint8)
         cls.stego_image = cls.test_dir / "test_with_stego.png"
-        img_array = np.array(img)
-        
-        # Modify LSB in a pattern (simulate hidden data)
-        # Set all LSBs to 1 in a region
-        img_array[50:150, 50:150, :] = img_array[50:150, 50:150, :] | 1
-        
-        stego_img = Image.fromarray(img_array.astype(np.uint8))
-        stego_img.save(cls.stego_image, 'PNG')
+        Image.fromarray(stego).save(cls.stego_image, 'PNG')
 
     @classmethod
     def tearDownClass(cls):
@@ -97,44 +111,55 @@ class TestSteganographyDetection(unittest.TestCase):
             unique_values = np.unique(plane)
             self.assertTrue(all(v in [0, 1] for v in unique_values))
 
-    def test_chi_square_test(self):
-        """Test chi-square statistical test"""
-        # Create a balanced LSB plane (50/50 distribution)
-        balanced_plane = np.random.randint(0, 2, size=(100, 100))
+    def test_pov_chi_square_returns_valid_range(self):
+        """Test PoV chi-square test output types and range"""
+        channel = self.clean_array[:, :, 0]
 
-        chi2_stat, p_value, prob = steganography_detection.chi_square_test(
-            balanced_plane
-        )
+        chi2_stat, p_value, prob, valid_pairs = \
+            steganography_detection.pov_chi_square_test(channel)
 
         self.assertIsInstance(chi2_stat, float)
         self.assertIsInstance(p_value, float)
         self.assertIsInstance(prob, float)
+        self.assertIsInstance(valid_pairs, int)
 
-        # For balanced distribution, probability should be relatively low
         self.assertGreaterEqual(prob, 0.0)
         self.assertLessEqual(prob, 100.0)
 
-    def test_chi_square_with_biased_data(self):
-        """Test chi-square with obviously biased LSB plane"""
-        # Create heavily biased plane (90% ones)
-        biased_plane = np.ones((100, 100), dtype=np.uint8)
-        biased_plane[:10, :] = 0  # Only 10% zeros
+    def test_pov_chi_square_flags_embedded_data(self):
+        """A channel whose LSBs are random reads as embedded; a clean one does not.
 
-        chi2_stat, p_value, prob = steganography_detection.chi_square_test(
-            biased_plane
-        )
+        Note the direction: LSB embedding equalises the two members of each
+        Pair-of-Values, so a HIGH score means equalised means suspicious.
+        A lopsided LSB plane is evidence *against* embedding, not for it.
+        """
+        clean = self.clean_array[:, :, 0]
+        stego = np.array(Image.open(self.stego_image).convert('RGB'))[:, :, 0]
 
-        # Biased data should have high probability
-        self.assertGreater(prob, 50.0)
+        _, _, clean_prob, _ = steganography_detection.pov_chi_square_test(clean)
+        _, _, stego_prob, _ = steganography_detection.pov_chi_square_test(stego)
+
+        self.assertLess(clean_prob, 20.0)
+        self.assertGreater(stego_prob, 80.0)
+
+    def test_pov_chi_square_insufficient_data(self):
+        """A flat image populates too few pairs to test; report no evidence."""
+        flat = np.full((100, 100), 128, dtype=np.uint8)
+
+        chi2_stat, _, prob, valid_pairs = \
+            steganography_detection.pov_chi_square_test(flat)
+
+        self.assertLess(valid_pairs, 2)
+        self.assertEqual(chi2_stat, 0.0)
+        self.assertEqual(prob, 0.0)
 
     def test_analyze_blocks(self):
         """Test block-based analysis"""
-        img = Image.open(self.test_image).convert('RGB')
-        img_array = np.array(img)
-        lsb_planes = steganography_detection.extract_lsb_planes(img_array)
+        img_array = self.clean_array
 
+        # analyze_blocks takes full channel values, not the LSB plane
         heatmap = steganography_detection.analyze_blocks(
-            lsb_planes['red'], block_size=32
+            img_array[:, :, 0], block_size=32
         )
 
         # Check heatmap dimensions
@@ -148,13 +173,12 @@ class TestSteganographyDetection(unittest.TestCase):
 
     def test_visual_analysis_map_creation(self):
         """Test visual analysis map generation"""
-        img = Image.open(self.test_image).convert('RGB')
-        img_array = np.array(img)
-        lsb_planes = steganography_detection.extract_lsb_planes(img_array)
+        img_array = self.clean_array
 
         heatmaps = {
-            channel: steganography_detection.analyze_blocks(plane)
-            for channel, plane in lsb_planes.items()
+            name: steganography_detection.analyze_blocks(
+                img_array[:, :, idx], block_size=32)
+            for idx, name in enumerate(('red', 'green', 'blue'))
         }
 
         visual_map = steganography_detection.create_visual_analysis_map(
@@ -217,22 +241,49 @@ class TestSteganographyDetection(unittest.TestCase):
             self.assertIn('probability', results[path])
 
     def test_stego_image_higher_probability(self):
-        """Test that modified LSB image has higher probability"""
-        # Test normal image
+        """An LSB-embedded image must score higher than the clean original."""
         prob_normal, _, _ = steganography_detection.detect_lsb_steganography(
             str(self.test_image)
         )
-
-        # Test image with modified LSBs
         prob_stego, _, _ = steganography_detection.detect_lsb_steganography(
             str(self.stego_image)
         )
 
-        # Modified image should have higher probability (in most cases)
-        # Note: This might not always be true due to statistical variation
-        # but the test demonstrates the concept
-        self.assertIsInstance(prob_normal, float)
-        self.assertIsInstance(prob_stego, float)
+        self.assertGreater(prob_stego, prob_normal)
+
+    def test_clean_image_not_flagged(self):
+        """Regression: a clean image must not be reported as suspicious.
+
+        The previous global 50/50 LSB balance test had a statistic that grew
+        with pixel count, so a natural sub-1% imbalance saturated it and clean
+        multi-megapixel images scored as "High" risk.
+        """
+        prob, _, details = steganography_detection.detect_lsb_steganography(
+            str(self.test_image)
+        )
+
+        self.assertLess(prob, 20.0)
+        self.assertEqual(details['interpretation']['risk_level'], 'Low')
+
+    def test_score_is_scale_invariant(self):
+        """A clean image must not score higher merely for having more pixels.
+
+        Crops of the same clean photograph, 16x apart in pixel count. The old
+        global-balance statistic grew linearly with pixel count, so the larger
+        crop would score far higher despite being equally clean.
+        """
+        probs = []
+        for size in (128, 512):
+            crop = self.clean_array[:size, :size]
+            path = self.test_dir / f"scale_{size}.png"
+            Image.fromarray(crop).save(path, 'PNG')
+            prob, _, _ = steganography_detection.detect_lsb_steganography(
+                str(path))
+            probs.append(prob)
+            path.unlink()
+
+        for size, prob in zip((128, 512), probs):
+            self.assertLess(prob, 20.0, f"clean {size}px crop scored {prob}")
 
 
 class TestSteganographyEdgeCases(unittest.TestCase):

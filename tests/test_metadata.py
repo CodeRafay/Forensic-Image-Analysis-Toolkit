@@ -31,7 +31,7 @@ class TestMetadataAnalysis(unittest.TestCase):
             },
             "Exif": {
                 piexif.ExifIFD.DateTimeOriginal: b"2024:01:01 12:00:00",
-                piexif.ExifIFD.ISO: 100,
+                piexif.ExifIFD.ISOSpeedRatings: 100,
             },
         }
         exif_bytes = piexif.dump(exif_dict)

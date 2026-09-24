@@ -1,6 +1,4 @@
-import struct
 import numpy as np
-from pathlib import Path
 
 
 def analyze_quantization_table(image_path):
@@ -56,9 +54,9 @@ def analyze_quantization_table(image_path):
         for table_id, qtable in qtables.items():
             table_array = np.array(qtable)
 
-            # Estimate quality from quantization table
-            # Standard JPEG tables scale linearly with quality
-            quality_estimate = estimate_jpeg_quality(table_array)
+            # Estimate quality by inverting the IJG scaling. Table 0 is
+            # luminance, the rest chrominance — they use different standards.
+            quality_estimate = estimate_jpeg_quality(table_array, table_id)
 
             # Analyze table characteristics
             table_analysis = {
@@ -76,7 +74,7 @@ def analyze_quantization_table(image_path):
                     f"Table {table_id}: Low quality ({quality_estimate}) - high compression")
 
             # Check for non-standard tables
-            if not is_standard_table(table_array):
+            if not is_standard_table(table_array, table_id):
                 warnings.append(
                     f"Table {table_id}: Non-standard quantization table detected - possible editing software")
 
@@ -96,7 +94,14 @@ def analyze_quantization_table(image_path):
 
 def extract_jpeg_quantization_tables(image_path):
     """
-    Extracts quantization tables by parsing JPEG markers.
+    Extracts quantization tables from a JPEG.
+
+    Uses Pillow's JPEG decoder, which walks the marker structure properly.
+    A naive byte-scan for the DQT marker (0xFFDB) cannot be used here: that
+    byte pair also occurs inside entropy-coded scan data and inside APP
+    segments such as XMP, which yields dozens of tables built from unrelated
+    bytes. Pillow returns each table de-zigzagged into raster order, which is
+    the order `estimate_jpeg_quality` and `is_standard_table` expect.
 
     Args:
         image_path (str): Path to JPEG file
@@ -105,147 +110,130 @@ def extract_jpeg_quantization_tables(image_path):
         dict: Dictionary of quantization tables {table_id: [64 values]}
     """
     try:
-        with open(image_path, 'rb') as f:
-            data = f.read()
+        from PIL import Image
 
-        qtables = {}
-        pos = 0
-
-        # Look for DQT (Define Quantization Table) markers (0xFFDB)
-        while pos < len(data) - 1:
-            if data[pos] == 0xFF and data[pos + 1] == 0xDB:
-                # Found DQT marker
-                pos += 2
-
-                # Read length
-                if pos + 2 > len(data):
-                    break
-                length = struct.unpack('>H', data[pos:pos+2])[0]
-                pos += 2
-
-                # Read table data
-                table_data = data[pos:pos+length-2]
-
-                # Parse table(s)
-                idx = 0
-                while idx < len(table_data):
-                    if idx >= len(table_data):
-                        break
-
-                    # Precision and table ID
-                    pq_tq = table_data[idx]
-                    precision = (pq_tq >> 4) & 0x0F  # 0 = 8-bit, 1 = 16-bit
-                    table_id = pq_tq & 0x0F
-                    idx += 1
-
-                    # Read 64 values
-                    table_size = 64
-                    value_size = 2 if precision == 1 else 1
-
-                    table_values = []
-                    for i in range(table_size):
-                        if idx >= len(table_data):
-                            break
-                        if value_size == 2:
-                            if idx + 1 < len(table_data):
-                                val = struct.unpack(
-                                    '>H', table_data[idx:idx+2])[0]
-                                idx += 2
-                            else:
-                                break
-                        else:
-                            val = table_data[idx]
-                            idx += 1
-                        table_values.append(val)
-
-                    if len(table_values) == 64:
-                        qtables[table_id] = table_values
-
-                pos += length - 2
-            else:
-                pos += 1
-
-        return qtables
+        with Image.open(image_path) as img:
+            tables = getattr(img, 'quantization', None) or {}
+            # array.array -> plain list, and drop anything malformed
+            return {
+                int(table_id): list(values)
+                for table_id, values in tables.items()
+                if len(values) == 64
+            }
 
     except Exception:
         return {}
 
 
-def estimate_jpeg_quality(qtable):
+# Standard IJG quantization tables for quality 50, in raster order.
+# Pillow returns tables de-zigzagged, so these line up element for element.
+STANDARD_LUMINANCE = np.array([
+    16, 11, 10, 16, 24, 40, 51, 61,
+    12, 12, 14, 19, 26, 58, 60, 55,
+    14, 13, 16, 24, 40, 57, 69, 56,
+    14, 17, 22, 29, 51, 87, 80, 62,
+    18, 22, 37, 56, 68, 109, 103, 77,
+    24, 35, 55, 64, 81, 104, 113, 92,
+    49, 64, 78, 87, 103, 121, 120, 101,
+    72, 92, 95, 98, 112, 100, 103, 99
+])
+
+STANDARD_CHROMINANCE = np.array([
+    17, 18, 24, 47, 99, 99, 99, 99,
+    18, 21, 26, 66, 99, 99, 99, 99,
+    24, 26, 56, 99, 99, 99, 99, 99,
+    47, 66, 99, 99, 99, 99, 99, 99,
+    99, 99, 99, 99, 99, 99, 99, 99,
+    99, 99, 99, 99, 99, 99, 99, 99,
+    99, 99, 99, 99, 99, 99, 99, 99,
+    99, 99, 99, 99, 99, 99, 99, 99
+])
+
+
+def _standard_table(table_id):
+    """Table 0 is luminance; any other id is chrominance."""
+    return STANDARD_LUMINANCE if table_id == 0 else STANDARD_CHROMINANCE
+
+
+def estimate_jpeg_quality(qtable, table_id=0):
     """
-    Estimates JPEG quality from quantization table.
+    Estimates JPEG quality from a quantization table.
+
+    Inverts the IJG scaling that libjpeg applies when building a table:
+
+        scale = 5000/quality        if quality < 50
+        scale = 200 - 2*quality     otherwise
+        Q[i]  = clip((T50[i]*scale + 50) / 100, 1, 255)
+
+    so scale is recovered per entry as (100*Q[i] - 50) / T50[i] and inverted
+    back to a quality. Entries clipped at 1 or 255 carry no scale information
+    and are excluded.
 
     Args:
-        qtable (np.array): 64-element quantization table
+        qtable: 64-element quantization table (raster order)
+        table_id (int): 0 for luminance, otherwise chrominance
 
     Returns:
-        int: Estimated quality (0-100)
+        int: Estimated quality (1-100)
     """
-    # Standard JPEG quantization table for quality 50
-    standard_luminance = np.array([
-        16, 11, 10, 16, 24, 40, 51, 61,
-        12, 12, 14, 19, 26, 58, 60, 55,
-        14, 13, 16, 24, 40, 57, 69, 56,
-        14, 17, 22, 29, 51, 87, 80, 62,
-        18, 22, 37, 56, 68, 109, 103, 77,
-        24, 35, 55, 64, 81, 104, 113, 92,
-        49, 64, 78, 87, 103, 121, 120, 101,
-        72, 92, 95, 98, 112, 100, 103, 99
-    ])
-
-    if len(qtable) != 64:
+    q = np.asarray(qtable, dtype=np.float64).ravel()
+    if q.size != 64:
         return 50  # default
 
-    qtable_flat = qtable.flatten() if hasattr(qtable, 'flatten') else qtable
+    standard = _standard_table(table_id).astype(np.float64)
 
-    # Compare with standard table
-    # Quality = 100 when qtable values are minimal
-    # Quality = 0 when qtable values are very high
+    # Saturated entries pin to the clip bounds and would bias the estimate
+    usable = (q > 1) & (q < 255)
+    if not usable.any():
+        # Everything saturated: all 1s means maximum quality, all 255s minimum
+        return 100 if q.max() <= 1 else 1
 
-    # Compare first few values
-    avg_ratio = np.mean(qtable_flat[:8]) / standard_luminance[0]
+    scales = (100.0 * q[usable] - 50.0) / standard[usable]
+    scale = float(np.median(scales))  # median resists a few odd entries
 
-    if avg_ratio < 0.5:
-        quality = 95
-    elif avg_ratio < 1.0:
-        quality = 85
-    elif avg_ratio < 2.0:
-        quality = 70
-    elif avg_ratio < 3.0:
-        quality = 50
-    else:
-        quality = 30
+    if scale <= 0:
+        return 100
+    quality = 5000.0 / scale if scale > 100 else (200.0 - scale) / 2.0
 
-    return quality
+    return int(round(min(100.0, max(1.0, quality))))
 
 
-def is_standard_table(qtable):
+def is_standard_table(qtable, table_id=0, tolerance=0.02):
     """
-    Checks if quantization table follows standard JPEG patterns.
+    Checks whether a table is a scaled version of the standard IJG table.
+
+    A camera or a standard encoder produces T50 scaled by a single factor, so
+    every entry divided by its standard counterpart gives the same ratio.
+    Editing software with custom tables breaks that proportionality. The
+    previous check only tested that values grow toward high frequencies, which
+    nearly every table does, so it flagged almost nothing.
 
     Args:
-        qtable (np.array): Quantization table
+        qtable: 64-element quantization table (raster order)
+        table_id (int): 0 for luminance, otherwise chrominance
+        tolerance (float): Allowed relative spread in the per-entry ratios,
+            absorbing the integer rounding libjpeg applies
 
     Returns:
-        bool: True if appears to be standard
+        bool: True if the table matches the standard family
     """
-    # Check if values increase towards bottom-right (standard pattern)
-    # This is a simplified check
-    if len(qtable) != 64:
+    q = np.asarray(qtable, dtype=np.float64).ravel()
+    if q.size != 64:
         return False
 
-    try:
-        # Reshape to 8x8 if flat
-        if hasattr(qtable, 'shape') and len(qtable.shape) == 1:
-            qtable_2d = qtable.reshape(8, 8)
-        else:
-            qtable_2d = np.array(qtable).reshape(8, 8)
+    standard = _standard_table(table_id).astype(np.float64)
 
-        # Check if top-left (DC) is smaller than bottom-right (high freq)
-        # Standard tables have lower values for low frequencies
-        top_left_avg = np.mean(qtable_2d[:2, :2])
-        bottom_right_avg = np.mean(qtable_2d[-2:, -2:])
+    # Clipped entries lost their ratio; judge on the rest
+    usable = (q > 1) & (q < 255)
+    if usable.sum() < 8:
+        return True  # too little information to call it non-standard
 
-        return top_left_avg < bottom_right_avg * 0.8
-    except:
-        return True  # Assume standard if can't verify
+    ratios = q[usable] / standard[usable]
+    median = np.median(ratios)
+    if median <= 0:
+        return False
+
+    # Rounding to integers perturbs small quantizer values most, so allow the
+    # spread to scale with the rounding step (0.5/standard) as well.
+    allowed = tolerance + (0.5 / standard[usable]) / median
+    return bool(np.mean(np.abs(ratios - median) / median <= allowed) >= 0.9)

@@ -12,12 +12,29 @@ Think of it like:
 
 ## What Does CMFD Measure?
 
-- **Block similarities** across the image (8×8 pixel blocks)
+- **Block similarities** across the image (16×16 pixel blocks by default)
 - **Feature matching** between regions
 - **Spatial relationships** of matching blocks
 - **Distortion patterns** (rotated, scaled, or skewed copies)
 - **DCT coefficient matching** for JPEG images
 - **Keypoint descriptors** (SIFT-like features)
+
+## The Similarity Threshold
+
+The default is **0.99**, and it is deliberately strict. Because features are
+texture-only, a genuine cloned region matches at essentially **1.0**, while
+unrelated blocks in a normal photo top out around 0.99.
+
+Measured on the bundled sample image:
+
+| Threshold | Clean image | Image with a cloned block |
+| --------- | ----------- | ------------------------- |
+| 0.95      | saturated   | saturated                 |
+| 0.97      | 254 matches | 437 matches               |
+| **0.99**  | **1 match** | **123 matches**           |
+
+Lowering the slider below ~0.97 will match almost everything and tell you
+nothing. Raise it if a textured image still produces noise.
 
 ## How to Interpret Results
 
@@ -32,7 +49,7 @@ Think of it like:
 
 1. **Exact Block Matches**
 
-   - Identical 8×8 blocks at different locations
+   - Identical blocks at different locations
    - Perfect correlation indicates copying
 
 2. **Clustered Matches**
@@ -91,17 +108,25 @@ Copied Region:   Person A at location Y (identical pixels)
 
 **Step 1: Block Division**
 
-- Image divided into 8×8 pixel blocks (JPEG-sized)
+- Image divided into overlapping blocks (16×16 by default, adjustable 8-32)
+- Blocks step by half their width, so neighbours overlap 50%
 
 **Step 2: Feature Extraction**
 
-- Each block analyzed for distinctive characteristics
-- DCT coefficients or keypoint descriptors calculated
+- Each block is transformed with a DCT
+- The low-frequency coefficients become the block's signature
+- **The DC coefficient is deliberately excluded.** DC is just the block's
+  average brightness, and it is so much larger than everything else that
+  including it makes matching compare brightness instead of texture — two
+  completely unrelated blocks then score 0.95 similarity.
 
 **Step 3: Matching**
 
-- Similar blocks compared across entire image
-- Similarity scores calculated (0-100)
+- Feature vectors are sorted so near-identical blocks land next to each other,
+  then each block is compared against its neighbours in that order
+- Similarity is a cosine score from 0 to 1
+- Matches closer together than the minimum distance are discarded, since
+  adjacent blocks naturally resemble each other
 
 **Step 4: Clustering**
 

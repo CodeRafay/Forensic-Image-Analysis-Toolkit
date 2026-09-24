@@ -6,6 +6,60 @@ import matplotlib
 matplotlib.use('Agg')
 
 
+def _find_anomalies(r_data, g_data, b_data):
+    """Shared anomaly checks over the three flattened channel arrays."""
+    anomalies = []
+
+    # Gaps (comb pattern - sign of level adjustment)
+    for name, data in [('Red', r_data), ('Green', g_data), ('Blue', b_data)]:
+        hist, _ = np.histogram(data, bins=256, range=(0, 256))
+        if np.sum(hist == 0) > 50:  # >50 empty bins suggests manipulation
+            anomalies.append(
+                f"{name} channel shows gaps (comb pattern) - possible level adjustment")
+
+    # Clipping
+    for name, data in [('Red', r_data), ('Green', g_data), ('Blue', b_data)]:
+        if np.sum(data == 0) > len(data) * 0.01:  # >1% at minimum
+            anomalies.append(
+                f"{name} channel clipped at minimum (shadow detail lost)")
+        if np.sum(data == 255) > len(data) * 0.01:  # >1% at maximum
+            anomalies.append(
+                f"{name} channel clipped at maximum (highlight detail lost)")
+
+    return anomalies
+
+
+def detect_histogram_anomalies(image_path):
+    """
+    Detects statistical anomalies in the image histogram.
+
+    Args:
+        image_path (str): Path to the image
+
+    Returns:
+        tuple: (anomalies, severity)
+            - anomalies (list): Detected anomaly descriptions
+            - severity (str): "low", "medium" or "high"
+    """
+    try:
+        with Image.open(image_path) as img:
+            arr = np.asarray(img.convert('RGB'))
+
+        anomalies = _find_anomalies(
+            arr[:, :, 0].ravel(), arr[:, :, 1].ravel(), arr[:, :, 2].ravel())
+    except Exception as e:
+        return [f"Analysis failed: {e}"], "low"
+
+    if not anomalies:
+        severity = "low"
+    elif len(anomalies) <= 2:
+        severity = "medium"
+    else:
+        severity = "high"
+
+    return anomalies, severity
+
+
 def generate_histogram(image_path):
     """
     Generates a histogram visualization of the image with statistical analysis.
@@ -58,24 +112,7 @@ def generate_histogram(image_path):
         }
 
         # Check for histogram anomalies
-        warnings = []
-
-        # Check for gaps (comb pattern - sign of level adjustment)
-        for channel_name, channel_data in [('Red', r_data), ('Green', g_data), ('Blue', b_data)]:
-            hist, _ = np.histogram(channel_data, bins=256, range=(0, 256))
-            zero_bins = np.sum(hist == 0)
-            if zero_bins > 50:  # More than 50 empty bins suggests manipulation
-                warnings.append(
-                    f"{channel_name} channel shows gaps (comb pattern) - possible level adjustment")
-
-        # Check for clipping
-        for channel_name, data in [('Red', r_data), ('Green', g_data), ('Blue', b_data)]:
-            if np.sum(data == 0) > len(data) * 0.01:  # >1% at minimum
-                warnings.append(
-                    f"{channel_name} channel clipped at minimum (shadow detail lost)")
-            if np.sum(data == 255) > len(data) * 0.01:  # >1% at maximum
-                warnings.append(
-                    f"{channel_name} channel clipped at maximum (highlight detail lost)")
+        warnings = _find_anomalies(r_data, g_data, b_data)
 
         # Create histogram visualization
         plt.figure(figsize=(12, 6))

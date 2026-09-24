@@ -1,5 +1,32 @@
 # 🔀 Resampling Detection
 
+> ## ⚠️ Known Limitation — The Score Is Not Currently Meaningful
+>
+> **This module's resampling score saturates and does not discriminate.** A
+> never-resized image scores ~0.94, while the interpretation text says
+> "score > 0.5 suggests likely resampling".
+>
+> | Image | Score |
+> | ----- | ----- |
+> | Native, never resized | 0.944 |
+> | Upscaled 2× | 0.974 |
+> | Downscaled then upscaled | 1.000 |
+> | Nearest-neighbour upscale | 0.947 |
+>
+> **Why:** the test asks whether *any* pixel in a frequency ring exceeds the
+> 95th percentile. Since 5% of all pixels exceed that by definition, and rings
+> contain hundreds to thousands of pixels, nearly every ring fires regardless
+> of the image. 17 of 19 rings fire on a clean photo.
+>
+> The interpolation classifier has the same problem: it reports "Bicubic" for
+> every input, including nearest-neighbour upscaling, which should be the
+> easiest case to identify.
+>
+> **Treat both outputs as unreliable** until the detector is reimplemented
+> (a correct approach measures periodicity in the *variance of second
+> derivatives*, looking for peaks at frequencies tied to the scaling factor).
+> The description below explains the technique in principle.
+
 ## What is Resampling Detection?
 
 Resampling is when an image is **scaled up or down and then saved**. When you resize an image, interpolation algorithms create new pixels, leaving telltale patterns. Resampling detection finds these patterns to reveal image manipulation.

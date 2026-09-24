@@ -2,6 +2,11 @@ from PIL import Image, ImageChops, ImageEnhance, ImageFilter
 import numpy as np
 import io
 
+# Error level above which a pixel counts as suspicious. Used by both the
+# suspicious_areas_percent metric and the threshold_ela() mask so the reported
+# percentage always matches the mask the user is looking at.
+SUSPICIOUS_THRESHOLD = 40
+
 # ============================================================
 # ------------------------ ELA CORE ---------------------------
 # ============================================================
@@ -57,10 +62,13 @@ def perform_ela(image_path, quality=95, error_scale=10, overlay_opacity=0.5, _im
         diff_np = np.asarray(diff, dtype=np.float32)
         max_val = float(diff_np.max())
         metrics = {
-            "max_diff": max_val,
-            "mean_diff": float(diff_np.mean()),
-            "std_diff": float(diff_np.std()),
-            "anomaly_score": float(diff_np.mean() + 2 * diff_np.std())
+            "max_error": max_val,
+            "mean_error": float(diff_np.mean()),
+            "std_error": float(diff_np.std()),
+            "anomaly_score": float(diff_np.mean() + 2 * diff_np.std()),
+            # Share threshold_ela's cutoff so the number matches the mask it renders
+            "suspicious_areas_percent": float(
+                (diff_np > SUSPICIOUS_THRESHOLD).mean() * 100.0)
         }
         del diff_np, diff
 
@@ -74,8 +82,12 @@ def perform_ela(image_path, quality=95, error_scale=10, overlay_opacity=0.5, _im
         return None, None, None
 
 
-def ela_multi_quality(image_path, qualities=[75, 85, 95], error_scale=10, overlay_opacity=0.5, _img=None):
-    """Run ELA at multiple JPEG compression levels."""
+def multi_quality_ela(image_path, qualities=[70, 85, 95], error_scale=10, overlay_opacity=0.5, _img=None):
+    """Run ELA at multiple JPEG compression levels.
+
+    Returns:
+        dict: {quality: {"ela": PIL.Image, "overlay": PIL.Image, "metrics": dict}}
+    """
     # Load once and pass to each call
     img = _img if _img is not None else Image.open(image_path).convert("RGB")
     results = {}
@@ -93,6 +105,10 @@ def ela_multi_quality(image_path, qualities=[75, 85, 95], error_scale=10, overla
     if _img is None:
         img.close()
     return results
+
+
+# Back-compat alias for the pre-rename name
+ela_multi_quality = multi_quality_ela
 
 
 # ============================================================
@@ -148,16 +164,34 @@ def noise_map(image_path, _gray_img=None):
 
 
 def sharpness_map(image_path, _gray_img=None):
-    """Laplacian-like sharpness map."""
+    """
+    Laplacian sharpness map: local second derivative, high where detail is sharp.
+
+    Uses an actual 3x3 Laplacian rather than PIL's FIND_EDGES. FIND_EDGES is
+    what noise_map() already applies, so the two functions previously returned
+    byte-identical images while the UI presented them as independent evidence.
+    The Laplacian responds to focus and sharpening, which is the distinct thing
+    this map is meant to show.
+    """
     try:
         img = _gray_img if _gray_img is not None else Image.open(
             image_path).convert("L")
-        lap = img.filter(ImageFilter.FIND_EDGES)
-        lap_np = np.asarray(lap, dtype=np.float32)
+        a = np.asarray(img, dtype=np.float32)
+        if a.shape[0] < 3 or a.shape[1] < 3:
+            return Image.fromarray(np.zeros(a.shape, dtype=np.uint8))
+
+        # 4-neighbour Laplacian on the interior; edges stay 0
+        lap_np = np.zeros_like(a)
+        lap_np[1:-1, 1:-1] = np.abs(
+            4.0 * a[1:-1, 1:-1]
+            - a[:-2, 1:-1] - a[2:, 1:-1]
+            - a[1:-1, :-2] - a[1:-1, 2:]
+        )
+
         lmin, lmax = lap_np.min(), lap_np.max()
         lap_np = 255 * (lap_np - lmin) / (lmax - lmin + 1e-5)
         result = Image.fromarray(lap_np.astype(np.uint8))
-        del lap_np
+        del lap_np, a
         return result
     except Exception as e:
         print(f"[SHARPNESS MAP ERROR] {e}")
@@ -228,7 +262,7 @@ def ssim_map(original_img, compressed_img):
 # ============================================================
 
 
-def threshold_ela(ela_img, threshold=40):
+def threshold_ela(ela_img, threshold=SUSPICIOUS_THRESHOLD):
     """Generate binary mask of high-error areas."""
     ela_np = np.asarray(ela_img.convert("L"))
     mask = (ela_np > threshold).astype(np.uint8) * 255
@@ -251,7 +285,7 @@ def forensic_analysis(image_path, qualities=[75, 85, 95], error_scale=10, overla
     gray = original.convert("L")
 
     # ---------- ELA ----------
-    ela_results = ela_multi_quality(
+    ela_results = multi_quality_ela(
         image_path, qualities, error_scale=error_scale,
         overlay_opacity=overlay_opacity, _img=original
     )

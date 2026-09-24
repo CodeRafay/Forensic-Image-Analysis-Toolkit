@@ -16,19 +16,25 @@ Think of it like:
 
 ## What Does FFT Measure?
 
-- **High-frequency content** (sharp edges, details, noise)
+- **Power-law slope** — real photographs lose detail at a characteristic rate
+  (a 1/f² falloff, slope near **-2.0**). This is the primary signal.
+- **High-frequency content** (sharp edges, details, noise) as a share of total power
 - **Low-frequency content** (smooth areas, gradients)
-- **Phase consistency** (uniform patterns vs. random arrangements)
-- **Spectral uniformity** (even distribution vs. concentrated spikes)
 - **Natural patterns** (how real images should look)
+
+> **Note on phase:** earlier versions scored "phase consistency". That metric was
+> removed because it is mathematically constant — the standard deviation of a
+> spectrum's phase converges to 1.814 for *every* image, so it never carried any
+> information. It is still reported under technical details, but not scored.
 
 ## What Does DCT Measure?
 
-- **JPEG block patterns** (8×8 block consistency)
+- **JPEG blockiness** — how much stronger edges are *on* the 8×8 grid than
+  elsewhere. 1.00 means no grid is visible.
 - **Compression artifacts** (quantization patterns)
-- **Frequency distribution** across blocks
+- **Frequency distribution** (smooth vs. detailed vs. noisy content)
 - **High-frequency anomalies** (sharpening, noise)
-- **Block-level consistency** (uniform processing)
+- **Per-block texture energy** (shown as the block map)
 
 ## How to Interpret Results
 
@@ -40,11 +46,12 @@ Think of it like:
    - Natural mix of detail and smoothness
    - **Authenticity Score: 75+**
 
-2. **Natural Phase Consistency**
+2. **Natural Power-Law Falloff**
 
-   - Phase patterns show normal variation
-   - Not too uniform, not too random
+   - Spectrum slope between **-3.0 and -1.5** (natural photos sit near -2.0)
+   - Detail fades with frequency the way real optics and sensors produce
    - **Risk Level: Low**
+   - For reference: white noise measures ~0.0, a heavily blurred image ~-3.3
 
 3. **Smooth Spectral Distribution**
    - No strange spikes or peaks
@@ -67,9 +74,9 @@ Think of it like:
    - **Risk Level: Medium/High**
    - **Warning**: "Excessive smoothing or possible AI generation"
 
-3. **Unusual Phase Patterns**
-   - Too uniform or too chaotic
-   - Doesn't match natural image behavior
+3. **Spectrum Departs From the Power Law**
+   - Slope flatter than -1.5 → added noise, sharpening, or synthetic content
+   - Slope steeper than -3.0 → blur, heavy denoising, or upscaling
    - **Verdict**: "Suspicious frequency characteristics"
 
 ### ✅ Normal DCT Patterns (Likely Authentic)
@@ -81,11 +88,11 @@ Think of it like:
    - Edges/Noise (%): 15-25
    - **Score: 70+**
 
-2. **Consistent Block Compression**
+2. **No Visible JPEG Grid**
 
-   - Block consistency score: 7-10
-   - Uniform compression across blocks
-   - Natural JPEG artifact patterns
+   - Blockiness ratio below **1.10** (1.00 = no grid at all)
+   - Edges on the 8×8 boundaries are no stronger than edges elsewhere
+   - Consistent with light or no recompression
 
 3. **Good Compression Quality**
    - Quality indicator: 7-10
@@ -101,11 +108,13 @@ Think of it like:
    - **Score: 40-65**
    - **Warning**: "Artificial content generation suspected"
 
-2. **Block Inconsistencies**
+2. **Strong JPEG Grid**
 
-   - Block consistency <5
-   - Different 8×8 blocks show vastly different patterns
-   - Suggests splicing or region-based editing
+   - Blockiness ratio above **1.30**
+   - Edges line up on the 8×8 compression grid
+   - For reference: a clean photo measures ~1.01, the same photo resaved at
+     quality 50 measures ~1.23, and at quality 20 ~1.63
+   - Suggests heavy or repeated compression
 
 3. **Compression Artifacts**
    - Excessive quantization patterns
@@ -120,7 +129,7 @@ Think of it like:
 1. **AI-Generated Content**
 
    - Overly smooth, mathematically perfect patterns
-   - Unnatural spectral uniformity
+   - Power-law slope outside the natural -3.0 to -1.5 band
    - **Authentic Score: 30-50**
 
 2. **Artificial Sharpening**
@@ -136,8 +145,8 @@ Think of it like:
    - **Warning**: "Artificial blur filter applied"
 
 4. **Splicing Effects**
-   - Phase discontinuities at boundaries
    - Different frequency components in different regions
+   - Spliced areas may carry a different power-law slope than the host image
    - **Risk**: "Possible splicing detected"
 
 ### DCT Detects:
@@ -151,7 +160,7 @@ Think of it like:
 2. **Content-Aware Edits**
 
    - Fill regions show different DCT patterns
-   - Artificial block consistency violations
+   - Filled areas often lack the host image's compression grid
    - **Warning**: "Generated/filled content detected"
 
 3. **Unnatural Texture Distribution**
@@ -188,27 +197,26 @@ Natural Photo:          Over-Sharpened:         Over-Smoothed:
 - **Natural**: Gradual brightness fall-off
 - **Suspicious**: Uneven or blocky patterns
 
-**Right image** (Block Consistency):
+**Right image** (Block Texture Map):
 
-- Green = Consistent blocks
-- Yellow = Minor variations
-- Red = High variance (suspicious)
-- **Natural**: Mostly green
-- **Suspicious**: Large red regions
+- Green = Flat, low-detail blocks
+- Yellow = Moderate texture
+- Red = High-detail blocks
+- This map shows **where the detail is**, mirroring the image's own content —
+  it is a texture overview, not a suspicion score. Sky reads green, foliage
+  reads red, and that is expected. Judge compression from the blockiness ratio
+  above, not from this map's colours.
 
 ## Authenticity Scoring Explained
 
 ### FFT Score (0-100):
 
-- **Phase Consistency (0-30 pts)**
-  - How uniform the phase patterns are
-  - Natural images score 15-25 points
-- **High-Frequency Content (0-35 pts)**
-  - Balance of sharpness vs. smoothness
-  - Natural images score 20-30 points
-- **Distribution Uniformity (0-35 pts)**
-  - Spectral energy distribution
-  - Natural images score 20-28 points
+- **Power-Law Slope (0-50 pts)**
+  - 50 pts when the slope sits between -3.0 and -1.5
+  - 25 pts for a near miss, 0 for a sharp departure
+- **High-Frequency Content (0-50 pts)**
+  - 50 pts when 0.2%-3% of spectral power sits above half-Nyquist
+  - 20 pts when it is well below (over-smooth) or well above (noisy/sharpened)
 
 **Overall Scores:**
 
@@ -216,11 +224,14 @@ Natural Photo:          Over-Sharpened:         Over-Smoothed:
 - 60-79: Uncertain, requires other techniques
 - <60: Suspicious, possible manipulation
 
+For reference, measured on the bundled sample: an authentic photo scores **100**,
+a heavily blurred copy **45**, an oversharpened copy **45**, and pure noise **20**.
+
 ### DCT Score (0-100):
 
 - **Frequency Distribution (0-30 pts)**
 - **High-Frequency Content (0-30 pts)**
-- **Block Consistency (0-25 pts)**
+- **JPEG Blockiness (0-25 pts)** — 25 below 1.10, 15 below 1.30, 5 above
 - **Quantization Patterns (0-15 pts)**
 
 ## Limitations
@@ -291,7 +302,7 @@ Natural Photo:          Over-Sharpened:         Over-Smoothed:
 ### DCT:
 
 1. Are the content percentages in natural ranges?
-2. Is block consistency score above 7?
+2. Is the JPEG blockiness ratio below 1.10?
 3. Do anomalies make sense for this image source?
 4. Are there signs of multiple compressions?
 

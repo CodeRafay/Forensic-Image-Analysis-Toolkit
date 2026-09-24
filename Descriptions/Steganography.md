@@ -24,28 +24,54 @@ Think of it like invisible ink hidden in a normal letter. The letter looks perfe
 
 This module uses **statistical analysis** to detect hidden data:
 
-### 1. LSB Plane Extraction
-- Extracts the LSB from each RGB channel
-- Creates binary maps showing only the last bit of each pixel
+### 1. Pair-of-Values (PoV) Chi-Square Test
 
-### 2. Chi-Square Statistical Test
-- In natural images, LSB bits are approximately 50/50 (0s and 1s)
-- Hidden data creates statistical anomalies
-- Chi-square test detects deviations from expected randomness
+This is the Westfeld–Pfitzmann attack, and the logic is subtler than it first
+looks. Counting 0s and 1s does **not** work: LSB embedding doesn't change how
+many 1-bits an image has overall, and a simple 50/50 balance test gets more
+sensitive the bigger the image, so every large photo eventually looks guilty.
+
+Instead the test looks at **pairs of values that differ only in their last
+bit** — (0,1), (2,3), … (254,255):
+
+- Flipping an LSB moves a pixel between the two members of its pair, never out of it
+- So as embedding fills the image, the two members of each pair **even out**
+- A natural photo has lopsided pairs; a fully embedded one has balanced pairs
+
+**The direction is the opposite of what you might expect:** a *high* score means
+the pairs are already evened out, which is the fingerprint of embedding.
+
+### 2. LSB Randomness Check
+
+A payload is random bits, so an embedded LSB plane is also *spatially* random —
+neighbouring bits agree about half the time. Natural images, and especially
+**resized** ones, are not: interpolation averages neighbouring pixels and leaves
+the LSB plane correlated.
+
+Both tests must agree before the score rises. This matters because resizing also
+smooths the histogram, which evens out PoV pairs on its own — without this second
+check a clean resized photo scores as heavily embedded.
 
 ### 3. Block-Based Analysis
-- Divides image into blocks (typically 32×32 pixels)
+- Divides the image into blocks (192×192 pixels by default)
 - Analyzes each block independently
-- Creates heatmap showing suspicious regions
+- Creates a heatmap showing which regions look suspicious
+- Catches partial embedding that the whole-image test misses
 
 ## What Does the Analysis Show?
 
 ### 📊 Probability Score (0-100%)
 
-- **0-20%**: Low risk - LSB distribution appears natural
-- **20-50%**: Medium risk - Some anomalies detected
-- **50-80%**: High risk - Significant LSB irregularities
-- **80-100%**: Critical - Very likely steganography present
+- **0-20%**: Low risk - pairs are lopsided, as a natural image should be
+- **20-50%**: Medium risk - some evening out of value pairs
+- **50-80%**: High risk - significant pair convergence
+- **80-100%**: Critical - pairs are evened out across the image
+
+The score reports the **strongest single channel**, not the average, so data
+hidden in one channel isn't diluted by the other two.
+
+Measured on the bundled sample image: a clean photo scores **0%**, a fully
+embedded copy **100%**, and a 50%-capacity embed roughly **20%**.
 
 ### 🔥 Visual Heatmap
 
@@ -53,22 +79,28 @@ This module uses **statistical analysis** to detect hidden data:
 - **Warm colors (yellow/orange)**: Suspicious patterns
 - **Hot colors (red)**: High probability of hidden data
 
+Treat the heatmap as a **localisation aid, not a verdict** — the overall score is
+the verdict. Per-block testing is far weaker than the whole-image test, and on
+JPEG-sourced images roughly a third of blocks in a perfectly clean photo still
+read hot. Use it to see *where* a flagged image is suspicious, not to decide
+whether it is.
+
 ## Interpretation Guidelines
 
 ### ✅ Normal Patterns (Likely No Steganography)
 
-- **Uniform distribution** of 0s and 1s (~50/50)
 - **Low probability scores** across all channels
-- **Even heatmap** with no bright hotspots
-- **P-value > 0.05** in chi-square test
+- **Lopsided value pairs** - counts within each (2i, 2i+1) pair differ
+- **Spatially correlated LSB plane** - neighbouring bits agree more than half the time
+- **P-value near 0** in the PoV chi-square test
 
 ### ⚠️ Suspicious Patterns (Possible Hidden Data)
 
-- **Uneven distribution** of bits (e.g., 60/40 or worse)
-- **High probability scores** in specific regions
-- **Bright regions** in heatmap (red/orange areas)
-- **P-value < 0.05** indicating statistical significance
-- **Channel inconsistency** (one channel very different from others)
+- **High probability scores**, especially in one channel
+- **Value pairs evened out** - counts within pairs nearly equal
+- **Spatially random LSB plane** - neighbouring bits agree ~50% of the time
+- **P-value near 1** in the PoV chi-square test
+- **Bright regions** in heatmap concentrated in one area (partial embedding)
 
 ## Common Use Cases
 
@@ -107,16 +139,24 @@ This module uses **statistical analysis** to detect hidden data:
 - Works best on uncompressed or lightly compressed images
 - Heavy JPEG compression destroys LSB data
 
-### 3. **Natural Variations**
-- Some cameras produce non-random LSB patterns
-- Certain image types naturally have biased LSBs
+### 3. **Detection Scales With How Much Is Hidden**
+- The whole-image test needs a substantial fraction of capacity used
+- A full embed reads ~100%, half capacity ~20%, and a small payload is invisible to it
+- For sparse or partial embedding, read the block heatmap instead
 
-### 4. **No Data Extraction**
+### 4. **Smooth Histograms Weaken the Test**
+- The PoV test relies on a natural image having lopsided value pairs
+- Images with unusually smooth histograms (synthetic gradients, heavy denoising)
+  break that assumption
+- The randomness check catches the common case of resized images, but the
+  underlying limitation remains
+
+### 5. **No Data Extraction**
 - This tool detects steganography presence
 - It does NOT extract or decode hidden messages
 - Key-based extraction requires knowing the algorithm
 
-### 5. **Computation Time**
+### 6. **Computation Time**
 - Large images (>4000×4000) may take longer
 - Block-based analysis is computationally intensive
 

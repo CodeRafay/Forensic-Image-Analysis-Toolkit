@@ -16,20 +16,37 @@
 5. **JPEG Ghost Detection** - Multi-level compression artifacts
 6. **Quantization Table Analysis** - JPEG compression table forensics
 7. **Copy-Move Forgery Detection (CMFD)** - Duplicated region detection
-8. **PRNU Analysis** - Photo Response Non-Uniformity (sensor fingerprints)
+8. **PRNU Analysis** - Sensor noise statistics ⚠️ _camera matching unreliable, see Known Limitations_
 9. **Frequency Domain Analysis** - FFT/DCT-based tampering detection
-10. **Deepfake Detection** - GAN artifact classification
-11. **Resampling Detection** - Image resizing and interpolation artifacts
+10. **Deepfake Detection** - Heuristic GAN artifact classification
+11. **Resampling Detection** - Image resizing artifacts ⚠️ _score unreliable, see Known Limitations_
 12. **Steganography Detection** - LSB statistical analysis for hidden data detection
 13. **Hash Verification** - Cryptographic provenance tracking and authentication
 
 ### Information Security Features
 
-- **🔐 LSB Steganography Detection** - Chi-square testing for hidden data in Least Significant Bits
-- **🔑 Blockchain-Based Provenance** - Cryptographic and perceptual hash verification
-- **⚖️ Legal Chain of Custody** - Track image modifications with timestamps
+- **🔐 LSB Steganography Detection** - Westfeld–Pfitzmann Pair-of-Values chi-square attack, corroborated by an LSB spatial-randomness check
+- **🔑 Hash-Based Provenance Ledger** - Cryptographic and perceptual hash verification (a JSON ledger, not a real blockchain)
+- **⚖️ Chain of Custody Tracking** - Track image modifications with timestamps
 - **🔒 SHA-256 Integrity** - Exact file matching for evidence verification
 - **👁️ Perceptual Hashing** - Detect similar images despite minor modifications
+
+## ⚠️ Known Limitations
+
+Two modules currently report results that should not be relied on. Both are
+measured, reproducible problems, documented in full in their in-app technique
+descriptions:
+
+| Module | Problem |
+| ------ | ------- |
+| **PRNU** | The reference comparison correlates scene content rather than sensor fingerprint, so its same-camera verdict is effectively inverted. Single-image noise statistics remain usable. |
+| **Resampling** | The score saturates near 1.0 for every image, including never-resized ones. The interpolation classifier returns "Bicubic" for all inputs. |
+
+Additionally, the **hash ledger is not tamper-evident** — records are not
+cryptographically chained, so editing the JSON file goes undetected. It proves
+an image matches a record, not that the record is unaltered. **Deepfake
+detection** is a spectral heuristic that has not been validated against real
+GAN-generated images.
 
 ### Additional Features
 
@@ -82,6 +99,19 @@ streamlit run app.py
 ```
 
 The application will automatically open in your default browser at `http://localhost:8501`
+
+### 5. Running the Tests (Optional)
+
+The test suite needs the development dependencies, which are **not** in
+`requirements.txt`:
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+`pytest.ini` enforces a 70% coverage floor. To check pass/fail alone, run
+`pytest --no-cov`.
 
 ## 📁 Project Structure
 
@@ -137,11 +167,13 @@ VeritasForensics/
 │   ├── PROJECT_SUMMARY.md          # Project overview
 │   └── TECHNIQUES.md               # Techniques reference
 │
-├── tests/                          # Unit tests
+├── tests/                          # Test suite (102 tests)
 │   ├── __init__.py
 │   ├── test_ela.py                 # ELA tests
 │   ├── test_metadata.py            # Metadata tests
-│   └── test_integration.py         # Integration tests
+│   ├── test_hash_verification.py   # Hash/provenance tests
+│   ├── test_steganography_detection.py  # Steganography tests
+│   └── test_integration.py         # Cross-module + metric regression tests
 │
 ├── assets/                         # Static files
 │   ├── style.css                   # Custom CSS
@@ -217,9 +249,11 @@ Identifies duplicated regions within the same image.
 
 #### PRNU Analysis
 
-Extracts sensor-specific noise patterns unique to each camera.
+Extracts noise residual statistics and checks their consistency across the image.
 
-**Use Case**: Verify camera source consistency
+**Use Case**: Spot regions with inconsistent noise (possible splicing)
+
+⚠️ The camera-matching comparison is currently unreliable — see Known Limitations.
 
 #### Frequency Domain Analysis
 
@@ -235,9 +269,11 @@ Identifies GAN-generated or AI-manipulated faces.
 
 #### Resampling Detection
 
-Identifies traces of image resizing or interpolation.
+Looks for the periodic frequency patterns that interpolation leaves behind.
 
 **Use Case**: Detect resolution manipulation
+
+⚠️ The score does not currently discriminate — see Known Limitations.
 
 ## ⚙️ Configuration
 

@@ -1,11 +1,11 @@
 import piexif
 from PIL import Image
 import os
+import io
 import hashlib
 import struct
 from datetime import datetime
 import json
-import re
 
 # ============================================================
 # ---------------------- CORE METADATA ------------------------
@@ -289,6 +289,87 @@ def detect_anomalies(metadata):
 
     anomalies["authenticity_score"] = max(0, score)
     return anomalies
+
+
+def detect_thumbnail_mismatch(image_path, min_correlation=0.90):
+    """
+    Checks whether the embedded EXIF thumbnail matches the main image.
+
+    Editors often update the full image but leave the original thumbnail
+    behind, so a stale thumbnail can reveal what the picture looked like
+    before it was edited.
+
+    Compares by downscaling the main image to the thumbnail's size and
+    correlating pixels. Perceptual hashes were measured and rejected here:
+    phash scores a genuine embedded thumbnail and a deliberately stale one
+    identically (distance 24 for both), because it is dominated by the
+    rescale/recompress artefacts rather than the content. Correlation
+    separates them cleanly — genuine 0.94-0.999, stale 0.82, unrelated 0.001.
+
+    Args:
+        image_path (str): Path to the image
+        min_correlation (float): Correlation at or above which the thumbnail
+            is considered to match.
+
+    Returns:
+        tuple: (mismatch, details)
+            - mismatch (bool): True if the thumbnail disagrees with the image
+            - details (dict): Comparison metrics
+    """
+    try:
+        import numpy as np
+
+        thumb_bytes = piexif.load(image_path).get("thumbnail")
+        if not thumb_bytes:
+            return False, {"thumbnail_present": False,
+                           "reason": "No embedded thumbnail to compare"}
+
+        with Image.open(io.BytesIO(thumb_bytes)) as thumb, \
+                Image.open(image_path) as main:
+            thumb_size, main_size = thumb.size, main.size
+            thumb_arr = np.asarray(thumb.convert('RGB'), dtype=np.float64)
+            main_small = np.asarray(
+                main.convert('RGB').resize(thumb_size, Image.LANCZOS),
+                dtype=np.float64)
+
+        # Flat images have zero variance, which makes correlation undefined
+        if thumb_arr.std() < 1e-9 or main_small.std() < 1e-9:
+            correlation = 1.0 if abs(
+                thumb_arr.mean() - main_small.mean()) < 1.0 else 0.0
+        else:
+            correlation = float(
+                np.corrcoef(main_small.ravel(), thumb_arr.ravel())[0, 1])
+
+        main_ratio = main_size[0] / main_size[1]
+        thumb_ratio = thumb_size[0] / thumb_size[1]
+        ratio_mismatch = abs(main_ratio - thumb_ratio) > 0.1
+        content_mismatch = correlation < min_correlation
+
+        details = {
+            "thumbnail_present": True,
+            "thumbnail_size": thumb_size,
+            "main_size": main_size,
+            "main_aspect_ratio": round(main_ratio, 4),
+            "thumbnail_aspect_ratio": round(thumb_ratio, 4),
+            "aspect_ratio_mismatch": ratio_mismatch,
+            "correlation": round(correlation, 4),
+            "min_correlation": min_correlation,
+            "content_mismatch": content_mismatch,
+        }
+        if content_mismatch:
+            details["interpretation"] = (
+                "Thumbnail content differs from the main image - the image may "
+                "have been edited without regenerating the thumbnail")
+        elif ratio_mismatch:
+            details["interpretation"] = (
+                "Thumbnail aspect ratio differs - possible cropping after capture")
+        else:
+            details["interpretation"] = "Thumbnail is consistent with the main image"
+
+        return bool(ratio_mismatch or content_mismatch), details
+
+    except Exception as e:
+        return False, {"error": str(e), "thumbnail_present": False}
 
 
 # ============================================================

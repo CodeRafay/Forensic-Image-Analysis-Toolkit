@@ -1,5 +1,30 @@
 # 📡 PRNU Analysis (Photo Response Non-Uniformity)
 
+> ## ⚠️ Known Limitation — Do Not Rely On The Camera Match
+>
+> **The reference-image comparison in this module is not trustworthy.** It
+> currently correlates *scene content* rather than sensor fingerprint, so its
+> same-camera verdict is effectively backwards.
+>
+> Measured with two simulated cameras:
+>
+> | Test | Reported correlation | Verdict given | Correct answer |
+> | ---- | -------------------- | ------------- | -------------- |
+> | Same camera, different scene | 0.02 | "Low" | High |
+> | Different camera, same scene | 0.97 | "High" | Low |
+>
+> **Why:** the noise residual is extracted with a simple Gaussian high-pass,
+> which on a photograph is dominated by scene edges, not by the sensor's
+> multiplicative gain pattern. A correct implementation needs wavelet-based
+> denoising, intensity normalization, zero-mean row/column suppression, and
+> peak-to-correlation-energy scoring against a fingerprint averaged over many
+> images from the same camera.
+>
+> **What is still usable:** the single-image statistics (noise variance, block
+> consistency) are a reasonable *noise uniformity* measure and can hint at
+> splicing or heavy processing. The camera-identification claim below describes
+> the technique in general, not what this implementation currently delivers.
+
 ## What is PRNU Analysis?
 
 PRNU is like the **"fingerprint of a camera sensor"** – every physical camera sensor has tiny imperfections that create a unique, nearly invisible pattern in every photo it takes. This fingerprint is so distinctive it can identify exactly which camera took the photo.
