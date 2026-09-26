@@ -248,13 +248,35 @@ if result['results']['matches_found'] > 0:
 
 Analyzes Photo Response Non-Uniformity (sensor fingerprint).
 
+The residual pipeline is wavelet denoising → zero-mean → Wiener filtering, and
+matching correlates the residual against `I_test * K` because PRNU is
+multiplicative. A plain high-pass residual will not work: on a photograph it is
+dominated by scene edges, which makes the comparison measure scene similarity
+rather than sensor identity.
+
+**Parameters:**
+
+- `image_path` (str): Test image
+- `reference_image_path` (str | list): One or more images from the candidate
+  camera. More references give a cleaner fingerprint — measured match strength
+  is +0.28 with one reference, +0.47 with two, +0.51 with four, against
+  non-matches within ±0.012 of zero. References must share the test image's
+  pixel dimensions, since the fingerprint is pixel-aligned.
+
 **Returns:** `analysis` (dict)
 
 - `status`, `method`, `image_shape`, `warnings`, `interpretation`
-- `metrics`: `prnu_variance`, `prnu_mean`, `prnu_std`, `pattern_strength`,
+- `metrics`: `noise_variance`, `noise_mean_abs`, `pattern_strength`,
   `variance_consistency`, `blocks_analyzed`
-- `reference_analysis` (only when a reference is supplied): `correlation`,
-  `same_camera_likelihood`, `interpretation`
+- `prnu_pattern_path`: Rendered noise residual
+- `correlation_analysis` (only with a reference): `correlation`,
+  `same_camera_likelihood` (`Low`/`Medium`/`High`), `verdict`,
+  `reference_images_used`, `match_threshold`, `interpretation`, and
+  `suspicious_blocks` listing regions that carry no fingerprint — i.e. content
+  spliced in from a different sensor
+
+Helpers: `extract_noise_residual()`, `estimate_fingerprint()`,
+`normalized_correlation()`.
 
 ---
 
@@ -327,21 +349,38 @@ Both are heuristic detectors; reliable deepfake detection needs a trained model.
 
 #### `detect_resampling(image_path)`
 
-Detects image resampling artifacts.
+Detects rescaling and recovers the scale factor.
+
+Interpolation makes the variance of the second derivative periodic, at a
+frequency of exactly `1 - 1/s` for scale factor `s`. Measured recovery is
+exact: 1.05 -> 1.05, 1.25 -> 1.25, 1.5 -> 1.50, 1.9 -> 1.90.
 
 **Returns:** `analysis` (dict)
 
-- `status` (`"analysis_complete"`), `method`, `image_size`,
-  `resampling_score` (0.0-1.0), `artifacts_detected`, `interpretation`
+- `status` (`"analysis_complete"`), `method`, `image_size`
+- `resampling_detected` (bool), `resampling_score` (0.0-1.0),
+  `peak_prominence`, `detection_threshold`
+- `detected_axis`, `estimated_scale_factors` — often two candidates, because
+  above 2x the signature aliases and both readings fit the measurement
+- `per_axis`: per-axis prominence, frequency and scale candidates
+- `limitations`: stated in the result, since a negative is weak evidence.
+  Exact integer scaling lands on the Nyquist limit and downscaling leaves
+  little to detect.
 
 #### `detect_interpolation_method(image_path)`
 
-Identifies the interpolation method used.
+Identifies the interpolation kernel where the evidence supports it.
 
 **Returns:** `method` (dict)
 
-- `status`, `method`, `gradient_std`, `ringing_score`,
-  `likely_interpolation`, `confidence`
+- `status`, `method`, `likely_interpolation`, `confidence`,
+  `duplication_rate`, `duplication_periodicity`, `overshoot_ratio`, `note`
+
+Nearest-neighbour is identified reliably (`confidence: "High"`) because it
+duplicates pixels on a regular lattice. Bilinear, bicubic and Lanczos are not
+reliably separable on a single image, so they are reported as a family with
+`confidence: "Low"`. When no resampling is present the confidence is `"N/A"`
+rather than a guessed kernel.
 
 ---
 
@@ -386,7 +425,25 @@ Verifies provenance against the local hash ledger.
 - `modification_history` (list): Chronological match records
 - `legal_validity` (dict): `valid`, `reason`, `chain_of_custody`, `admissible`
 - `details` (dict): `current_hashes`, `matches_found`, `match_details`,
-  `image_info`, `database_path`, `analysis_timestamp`
+  `image_info`, `database_path`, `chain_integrity`, `analysis_timestamp`
+
+The ledger's own integrity is checked on every lookup. A broken chain overrides
+any image match — matching against an altered ledger proves nothing — so
+`legal_validity` becomes `chain_of_custody: "Compromised"`, `admissible: False`.
+
+#### `verify_chain(db_path=DEFAULT_DB_PATH)`
+
+Walks the ledger and verifies every link.
+
+**Returns:** dict with `valid`, `total_records`, `first_invalid_index`,
+`errors`, and `legacy_records` (entries written before chaining existed, which
+can be neither confirmed nor refuted).
+
+#### `compute_record_hash(record, prev_hash)`
+
+SHA-256 over a record's canonical serialization plus its predecessor's hash.
+Editing a record breaks its own hash; recomputing that hash breaks the *next*
+record's `prev_hash`, so tampering surfaces either way.
 
 #### Other functions
 
@@ -395,8 +452,10 @@ Verifies provenance against the local hash ledger.
 `find_matches()`, `calculate_hash_distance()`, `export_database()`,
 `import_database()` and `get_database_stats()`.
 
-The ledger is a JSON file, not a distributed blockchain; `DEFAULT_DB_PATH`
-resolves relative to the project root.
+The ledger is a local hash chain, not a distributed blockchain: it is
+tamper-evident but has no network or consensus, so nothing prevents deleting
+the file and rebuilding it. `DEFAULT_DB_PATH` resolves relative to the project
+root rather than the working directory.
 
 ---
 

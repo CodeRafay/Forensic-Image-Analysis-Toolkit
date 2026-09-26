@@ -1,29 +1,26 @@
 # 📡 PRNU Analysis (Photo Response Non-Uniformity)
 
-> ## ⚠️ Known Limitation — Do Not Rely On The Camera Match
+> ## 📌 How To Get A Reliable Camera Match
 >
-> **The reference-image comparison in this module is not trustworthy.** It
-> currently correlates *scene content* rather than sensor fingerprint, so its
-> same-camera verdict is effectively backwards.
+> **Upload more than one reference image.** The fingerprint is averaged across
+> whatever references you give it, and accuracy climbs sharply:
 >
-> Measured with two simulated cameras:
+> | Reference images | Same camera | Different camera |
+> | ---------------- | ----------- | ---------------- |
+> | 1 | +0.28 | −0.01 |
+> | 2 | +0.47 | −0.00 |
+> | 4 | +0.51 | +0.00 |
 >
-> | Test | Reported correlation | Verdict given | Correct answer |
-> | ---- | -------------------- | ------------- | -------------- |
-> | Same camera, different scene | 0.02 | "Low" | High |
-> | Different camera, same scene | 0.97 | "High" | Low |
+> Non-matching sensors land within about ±0.012 of zero, so anything above
+> **0.05** means the same sensor and above **0.15** means it confidently.
 >
-> **Why:** the noise residual is extracted with a simple Gaussian high-pass,
-> which on a photograph is dominated by scene edges, not by the sensor's
-> multiplicative gain pattern. A correct implementation needs wavelet-based
-> denoising, intensity normalization, zero-mean row/column suppression, and
-> peak-to-correlation-energy scoring against a fingerprint averaged over many
-> images from the same camera.
+> **References must be the same pixel dimensions as the test image.** The
+> fingerprint is pixel-aligned to the sensor, so a resized reference cannot be
+> compared and will be skipped.
 >
-> **What is still usable:** the single-image statistics (noise variance, block
-> consistency) are a reasonable *noise uniformity* measure and can hint at
-> splicing or heavy processing. The camera-identification claim below describes
-> the technique in general, not what this implementation currently delivers.
+> Best references are ordinary photos from the camera — ideally bright, evenly
+> lit ones, since PRNU is multiplicative and therefore strongest where the
+> image is bright.
 
 ## What is PRNU Analysis?
 
@@ -135,31 +132,45 @@ Verdict: Likely legitimate series, not cherry-picked
 
 ## Detection Process Explained
 
-### Step 1: Reference PRNU Extraction
+Recovering a sensor fingerprint takes more than a high-pass filter. A plain
+high-pass leaves **scene edges** dominant, and correlating two such outputs
+measures whether two pictures show the same *view*, not whether they came from
+the same *camera*. Four stages are needed:
 
-- Known camera database contains PRNU fingerprints
-- Or: Extract from multiple photos from same camera
+### Step 1: Wavelet Noise Residual
 
-### Step 2: Test Image Analysis
+- Denoise the image with a wavelet filter, then subtract: `W = I − denoise(I)`
+- Wavelet denoising separates sensor noise from scene structure far better
+  than a Gaussian blur, which simply returns the edges
 
-- Extract PRNU pattern from analyzed photo
-- Compare against reference fingerprints
+### Step 2: Zero-Mean
 
-### Step 3: Correlation Calculation
+- Subtract row means and column means
+- Colour-filter-array interpolation and JPEG blocking leave artifacts shared by
+  *every* camera of a model; these live in the row/column means
+- Without this, two unrelated cameras correlate through their common processing
 
-- Statistical correlation between patterns
-- Measures how well test image matches reference camera
+### Step 3: Wiener Filtering in the Frequency Domain
 
-### Step 4: Result Interpretation
+- Suppresses whatever periodic structure survives step 2
+- In testing this roughly doubled the single-reference match strength
 
-- High correlation (>0.010) = Strong match
-- Low correlation (<0.005) = No match
-- Multiple peaks = Multiple cameras
+### Step 4: Intensity-Modulated Correlation
 
-### Step 5: Confidence Scoring
+- PRNU is **multiplicative** (`I = I₀ + I₀·K`), so it is stronger in bright
+  regions than dark ones
+- The test residual is therefore compared against `I_test × K`, not against
+  `K` alone
+- The fingerprint itself uses the maximum-likelihood estimator
+  `K = Σ(Wᵢ·Iᵢ) / Σ(Iᵢ²)`, weighting each reference by its exposure
 
-- Account for image size, resolution, compression
-- Generate confidence percentage
+### Result Interpretation
+
+- Correlation **> 0.15** = confident same-sensor match
+- Correlation **> 0.05** = probable match
+- Correlation **≈ 0** (within ±0.012) = different sensor
+- Blocks that individually fall below 0.05 inside an otherwise matching image
+  are flagged as **spliced from another sensor**
 
 ## Real-World Examples
 

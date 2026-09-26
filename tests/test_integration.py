@@ -175,15 +175,17 @@ class TestAllTechniquesRun(unittest.TestCase):
         result = analyze_prnu(self.path)
 
         self._assert_ok(result, "metrics", "warnings")
-        self.assertIn("prnu_variance", result["metrics"])
+        self.assertIn("noise_variance", result["metrics"])
+        self.assertIn("pattern_strength", result["metrics"])
         self.assertGreater(result["metrics"]["blocks_analyzed"], 0)
 
     def test_prnu_with_reference(self):
         """Same image as its own reference must correlate near-perfectly."""
         result = analyze_prnu(self.path, reference_image_path=self.path)
 
-        self.assertIn("reference_analysis", result)
-        self.assertGreater(result["reference_analysis"]["correlation"], 0.9)
+        correlation = result["correlation_analysis"]
+        self.assertGreater(correlation["correlation"], 0.9)
+        self.assertEqual(correlation["same_camera_likelihood"], "High")
 
     # --- 8. Frequency ---------------------------------------------------
     def test_frequency_domain(self):
@@ -217,13 +219,25 @@ class TestAllTechniquesRun(unittest.TestCase):
     def test_resampling(self):
         result = detect_resampling(self.path)
 
-        self._assert_ok(result, "resampling_score", "artifacts_detected")
+        self._assert_ok(result, "resampling_score", "resampling_detected",
+                        "per_axis", "limitations")
         self.assertGreaterEqual(result["resampling_score"], 0.0)
+        self.assertLessEqual(result["resampling_score"], 1.0)
+
+        # This fixture was built by resizing 1024x576 -> 800x600, so the
+        # vertical axis really is rescaled by 600/576 = 1.042. The detector
+        # should say so, and should recover that factor.
+        self.assertTrue(result["resampling_detected"])
+        self.assertTrue(
+            any(abs(s - 600 / 576) < 0.02
+                for s in result["estimated_scale_factors"]),
+            f"expected ~1.042 among {result['estimated_scale_factors']}")
 
     def test_interpolation_method(self):
         result = detect_interpolation_method(self.path)
 
-        self._assert_ok(result, "likely_interpolation", "gradient_std")
+        self._assert_ok(result, "likely_interpolation", "confidence",
+                        "duplication_rate", "overshoot_ratio")
 
     # --- 11. Steganography ----------------------------------------------
     def test_steganography(self):
@@ -451,6 +465,265 @@ class TestMetricsRespondToInput(unittest.TestCase):
                 self.assertLess(prob, 20.0,
                                 f"clean {filt.name}-resized image scored {prob}%")
                 path.unlink()
+
+
+class TestPrnuIdentifiesCameras(unittest.TestCase):
+    """PRNU must key off the sensor, not the scene.
+
+    Regression for an inversion: extracting the residual with a plain Gaussian
+    high-pass left scene edges dominant, so two photos of the *same scene* from
+    *different cameras* correlated at 0.97 ("High") while the same camera on a
+    different scene correlated at 0.02 ("Low") — exactly backwards.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        from analysis.prnu import analyze_prnu as _analyze
+        cls.analyze = staticmethod(_analyze)
+
+        cls.test_dir = Path(__file__).parent / "test_prnu_images"
+        cls.test_dir.mkdir(exist_ok=True)
+
+        rng = np.random.default_rng(42)
+        scene = np.asarray(_sample_rgb().convert("L"), dtype=np.float64)
+        h, w = scene.shape
+        # Distinct scenes, so scene content cannot carry the correlation
+        scenes = [np.roll(scene, (i * 97, i * 53), axis=(0, 1))
+                  for i in range(5)]
+
+        # Two synthetic sensors: fixed multiplicative gain patterns
+        cls.gain_a = rng.normal(0, 0.03, (h, w))
+        gain_b = rng.normal(0, 0.03, (h, w))
+
+        def shoot(content, gain, seed, name):
+            noise = np.random.default_rng(seed).normal(0, 1.5, content.shape)
+            pixels = np.clip(content * (1 + gain) + noise, 0, 255)
+            path = cls.test_dir / f"{name}.png"
+            Image.fromarray(pixels.astype(np.uint8)).save(path)
+            return str(path), pixels
+
+        cls.references = [shoot(scenes[i], cls.gain_a, i, f"ref{i}")[0]
+                          for i in range(3)]
+        # Held-out scene, shot by each camera
+        cls.same_camera, cls.clean_pixels = shoot(
+            scenes[4], cls.gain_a, 50, "same_camera")
+        cls.other_camera, _ = shoot(scenes[4], gain_b, 51, "other_camera")
+
+        # A camera-A frame with a block replaced by camera B
+        spliced = cls.clean_pixels.copy()
+        foreign = shoot(scenes[4], gain_b, 77, "_foreign")[1]
+        spliced[128:384, 256:640] = foreign[128:384, 256:640]
+        cls.spliced = str(cls.test_dir / "spliced.png")
+        Image.fromarray(spliced.astype(np.uint8)).save(cls.spliced)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.test_dir, ignore_errors=True)
+
+    def test_same_camera_different_scene_matches(self):
+        result = self.analyze(self.same_camera,
+                              reference_image_path=self.references[0])
+        correlation = result["correlation_analysis"]
+
+        self.assertGreater(correlation["correlation"], 0.05)
+        self.assertIn(correlation["same_camera_likelihood"], ("Medium", "High"))
+
+    def test_different_camera_same_scene_does_not_match(self):
+        """The case that used to report 0.97 'High'."""
+        result = self.analyze(self.other_camera,
+                              reference_image_path=self.references[0])
+        correlation = result["correlation_analysis"]
+
+        self.assertLess(correlation["correlation"], 0.05)
+        self.assertEqual(correlation["same_camera_likelihood"], "Low")
+
+    def test_more_references_give_a_stronger_match(self):
+        one = self.analyze(self.same_camera,
+                           reference_image_path=self.references[0])
+        three = self.analyze(self.same_camera,
+                             reference_image_path=self.references)
+
+        self.assertEqual(three["correlation_analysis"]["reference_images_used"], 3)
+        self.assertGreater(three["correlation_analysis"]["correlation"],
+                           one["correlation_analysis"]["correlation"])
+
+    def test_splice_is_localised(self):
+        """A region from another sensor must be flagged, and only that region."""
+        clean = self.analyze(self.same_camera,
+                             reference_image_path=self.references)
+        spliced = self.analyze(self.spliced,
+                               reference_image_path=self.references)
+
+        self.assertEqual(
+            clean["correlation_analysis"].get("suspicious_blocks", []), [],
+            "clean image produced false splice detections")
+
+        blocks = spliced["correlation_analysis"].get("suspicious_blocks", [])
+        self.assertTrue(blocks, "splice from a different sensor went undetected")
+
+        # Spliced region is rows 128-384, cols 256-640 -> blocks 2-5 x 4-9 at 64px
+        for block in blocks:
+            self.assertIn(block["row"], range(2, 6))
+            self.assertIn(block["col"], range(4, 10))
+
+
+class TestResamplingRecoversScale(unittest.TestCase):
+    """Resampling detection must discriminate, and recover the scale factor.
+
+    Regression for a saturating statistic: the old test asked whether *any*
+    pixel in a frequency ring exceeded the 95th percentile. Since 5% of pixels
+    exceed it by construction, nearly every ring fired and a never-resized
+    image scored 0.944 against a stated threshold of 0.5.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.test_dir = Path(__file__).parent / "test_resample_images"
+        cls.test_dir.mkdir(exist_ok=True)
+        cls.base = _sample_rgb()
+        cls.width, cls.height = cls.base.size
+
+        cls.native = cls.test_dir / "native.png"
+        cls.base.save(cls.native, "PNG")
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.test_dir, ignore_errors=True)
+
+    def _resized(self, scale, resample=Image.Resampling.BICUBIC):
+        path = self.test_dir / f"scaled_{scale}_{resample.name}.png"
+        self.base.resize((int(self.width * scale), int(self.height * scale)),
+                         resample).save(path, "PNG")
+        return str(path)
+
+    def test_native_image_not_flagged(self):
+        result = detect_resampling(str(self.native))
+
+        self.assertFalse(result["resampling_detected"],
+                         f"clean image flagged, prominence "
+                         f"{result['peak_prominence']}")
+        self.assertLess(result["resampling_score"], 0.2)
+
+    def test_detects_and_recovers_fractional_scales(self):
+        """The true factor must appear among the reported candidates."""
+        for scale in (1.05, 1.25, 1.5, 1.9):
+            with self.subTest(scale=scale):
+                result = detect_resampling(self._resized(scale))
+
+                self.assertTrue(result["resampling_detected"],
+                                f"{scale}x rescaling went undetected")
+                self.assertTrue(
+                    any(abs(c - scale) < 0.05
+                        for c in result["estimated_scale_factors"]),
+                    f"{scale} missing from {result['estimated_scale_factors']}")
+
+    def test_documents_its_blind_spots(self):
+        """Integer scaling is undetectable here; that must be stated, not hidden."""
+        result = detect_resampling(self._resized(2.0))
+
+        self.assertFalse(result["resampling_detected"])
+        self.assertTrue(any("Integer scale" in lim
+                            for lim in result["limitations"]))
+
+    def test_identifies_nearest_neighbour(self):
+        result = detect_interpolation_method(
+            self._resized(1.5, Image.Resampling.NEAREST))
+
+        self.assertIn("Nearest", result["likely_interpolation"])
+        self.assertEqual(result["confidence"], "High")
+
+    def test_does_not_guess_a_kernel_for_unresampled_images(self):
+        """It used to answer 'Bicubic' for every input, including this one."""
+        result = detect_interpolation_method(str(self.native))
+
+        self.assertEqual(result["confidence"], "N/A")
+        self.assertIn("No resampling", result["likely_interpolation"])
+
+
+class TestLedgerIsTamperEvident(unittest.TestCase):
+    """The hash chain must detect edits to the ledger itself."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.test_dir = Path(__file__).parent / "test_ledger_images"
+        cls.test_dir.mkdir(exist_ok=True)
+
+        base = np.asarray(_sample_rgb((200, 150)))
+        cls.images = []
+        for i in range(3):
+            path = cls.test_dir / f"img{i}.png"
+            Image.fromarray(np.clip(base + i, 0, 255).astype(np.uint8)).save(path)
+            cls.images.append(str(path))
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.test_dir, ignore_errors=True)
+
+    def _fresh_ledger(self):
+        from analysis.hash_verification import add_to_blockchain
+
+        db = self.test_dir / "ledger.json"
+        if db.exists():
+            db.unlink()
+        for image in self.images:
+            add_to_blockchain(image, db_path=str(db))
+        return db
+
+    def test_untouched_chain_verifies(self):
+        from analysis.hash_verification import verify_chain
+
+        status = verify_chain(str(self._fresh_ledger()))
+
+        self.assertTrue(status["valid"])
+        self.assertEqual(status["total_records"], 3)
+        self.assertEqual(status["errors"], [])
+
+    def test_edited_record_is_detected(self):
+        import json
+        from analysis.hash_verification import verify_chain
+
+        db = self._fresh_ledger()
+        data = json.loads(db.read_text())
+        data["records"][1]["sha256"] = "0" * 64
+        db.write_text(json.dumps(data))
+
+        status = verify_chain(str(db))
+        self.assertFalse(status["valid"])
+        self.assertEqual(status["first_invalid_index"], 1)
+
+    def test_rehashed_record_still_breaks_the_next_link(self):
+        """Recomputing the edited record's own hash must not repair the chain."""
+        import json
+        from analysis.hash_verification import compute_record_hash, verify_chain
+
+        db = self._fresh_ledger()
+        data = json.loads(db.read_text())
+        record = data["records"][1]
+        record["sha256"] = "f" * 64
+        record["record_hash"] = compute_record_hash(record, record["prev_hash"])
+        db.write_text(json.dumps(data))
+
+        status = verify_chain(str(db))
+        self.assertFalse(status["valid"])
+        # The break now surfaces at the *following* record
+        self.assertEqual(status["first_invalid_index"], 2)
+
+    def test_tampering_invalidates_the_legal_verdict(self):
+        import json
+        from analysis.hash_verification import verify_image_provenance
+
+        db = self._fresh_ledger()
+        data = json.loads(db.read_text())
+        data["records"][0]["filename"] = "something_else.png"
+        db.write_text(json.dumps(data))
+
+        _, _, validity, details = verify_image_provenance(
+            self.images[0], db_path=str(db))
+
+        self.assertFalse(validity["valid"])
+        self.assertFalse(validity["admissible"])
+        self.assertEqual(validity["chain_of_custody"], "Compromised")
+        self.assertFalse(details["chain_integrity"]["valid"])
 
 
 class TestAppRendersResults(unittest.TestCase):

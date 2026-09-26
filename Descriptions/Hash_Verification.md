@@ -21,20 +21,34 @@ ledger:
 - **Tracks the chain of custody** for legal validity
 - **Detects unauthorized modifications** by comparing hashes
 
-> ⚠️ **"Blockchain" here is a simulation, and the ledger itself is not
-> tamper-evident.** Records are stored in a plain JSON file with no hash
-> linking between them and no integrity check over the file. Editing a stored
-> hash by hand goes completely undetected. What the module genuinely proves is
-> that *an image* matches *a record* — it cannot prove the record was not
-> altered. See Limitations below.
+> 📌 **"Blockchain" here means a local hash chain, not a distributed ledger.**
+> There is no network and no consensus — but the chaining is real. Each record
+> stores the hash of the record before it, so editing any entry is detected.
+> What it cannot do is stop someone deleting the file and starting over; for
+> that you would need an external anchor (a notary, a public chain, or an
+> append-only server).
 
 ### How It Works:
 
+Each record's hash covers both its own contents **and** the previous record's
+hash, so the entries form a chain:
+
 ```
-Original Image → Generate Hashes → Store in ledger → Verify Later
+Original Image → Generate Hashes → Append to chain → Verify Later
                                           ↓
-                     Timestamp + Hashes + Metadata (one JSON record)
+              Timestamp + Hashes + Metadata + prev_hash → record_hash
 ```
+
+```
+record 0            record 1            record 2
+prev: 0000…         prev: hash(0)       prev: hash(1)
+hash: hash(0)  ───► hash: hash(1)  ───► hash: hash(2)
+```
+
+Editing any field of record 1 changes what its hash *should* be, which no
+longer matches the hash stored in it. And if someone recomputes record 1's
+hash to cover their tracks, record 2's `prev_hash` no longer matches — the
+break simply moves one step down the chain. Either way the tampering surfaces.
 
 When you later verify an image, it compares current hashes with stored records to determine authenticity.
 
@@ -218,20 +232,25 @@ Image File → SHA-256 → Cryptographic Hash (exact)
 - **Lower distance** = More similar images
 - **Threshold**: Typically 10 bits for "similar" classification
 
-### Ledger Simulation:
+### Ledger:
 - **JSON-based storage**: Simple, portable database
-- **Append-only by convention**: Each entry timestamped, but the file is
-  editable and nothing detects edits
+- **Hash-chained**: Each entry carries `prev_hash` and `record_hash`, so edits
+  to any record are detected by `verify_chain()`
 - **Chronological ordering**: Establishes timeline
 - **Metadata included**: Full context for each image
+- **Verified on every lookup**: A compromised chain overrides any image match —
+  a match against an altered ledger proves nothing, so the verdict becomes
+  "Chain of custody: Compromised / not admissible"
 
 ## Limitations
 
-### 1. **Not a True Blockchain**
-- Simulated blockchain (JSON file, not distributed ledger)
-- Not cryptographically chained (no hash linking)
-- Suitable for demo/educational purposes
-- Production use would require real blockchain
+### 1. **A Local Hash Chain, Not a Distributed Ledger**
+- Cryptographically chained: edits to any record are detected
+- But local — no network, no consensus, no independent witnesses
+- **Wholesale replacement is still possible**: nothing stops someone deleting
+  the file and rebuilding a fresh, internally-consistent chain
+- Defeating that needs an external anchor — publishing the chain head to a
+  public blockchain, a timestamping authority, or an append-only server
 
 ### 2. **Perceptual Hash Limitations**
 - Cannot detect all modifications

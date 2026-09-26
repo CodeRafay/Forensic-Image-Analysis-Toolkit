@@ -16,37 +16,35 @@
 5. **JPEG Ghost Detection** - Multi-level compression artifacts
 6. **Quantization Table Analysis** - JPEG compression table forensics
 7. **Copy-Move Forgery Detection (CMFD)** - Duplicated region detection
-8. **PRNU Analysis** - Sensor noise statistics ⚠️ _camera matching unreliable, see Known Limitations_
+8. **PRNU Analysis** - Camera sensor fingerprinting and splice localisation
 9. **Frequency Domain Analysis** - FFT/DCT-based tampering detection
 10. **Deepfake Detection** - Heuristic GAN artifact classification
-11. **Resampling Detection** - Image resizing artifacts ⚠️ _score unreliable, see Known Limitations_
+11. **Resampling Detection** - Detects rescaling and recovers the scale factor
 12. **Steganography Detection** - LSB statistical analysis for hidden data detection
-13. **Hash Verification** - Cryptographic provenance tracking and authentication
+13. **Hash Verification** - Tamper-evident provenance chain
 
 ### Information Security Features
 
 - **🔐 LSB Steganography Detection** - Westfeld–Pfitzmann Pair-of-Values chi-square attack, corroborated by an LSB spatial-randomness check
-- **🔑 Hash-Based Provenance Ledger** - Cryptographic and perceptual hash verification (a JSON ledger, not a real blockchain)
-- **⚖️ Chain of Custody Tracking** - Track image modifications with timestamps
+- **🔑 Hash-Chained Provenance Ledger** - Each record commits to the one before it, so edits to the ledger are detected
+- **⚖️ Chain of Custody Tracking** - Verified on every lookup; a broken chain invalidates the verdict
 - **🔒 SHA-256 Integrity** - Exact file matching for evidence verification
 - **👁️ Perceptual Hashing** - Detect similar images despite minor modifications
+- **📡 Sensor Fingerprinting** - Match a photo to the camera that took it, and locate regions spliced in from a different sensor
 
-## ⚠️ Known Limitations
+## ⚠️ Scope and Limitations
 
-Two modules currently report results that should not be relied on. Both are
-measured, reproducible problems, documented in full in their in-app technique
-descriptions:
+Every technique here is a statistical indicator, not proof. Use several
+together and weigh them against context. Specific boundaries worth knowing,
+each stated in the tool's own output:
 
-| Module | Problem |
-| ------ | ------- |
-| **PRNU** | The reference comparison correlates scene content rather than sensor fingerprint, so its same-camera verdict is effectively inverted. Single-image noise statistics remain usable. |
-| **Resampling** | The score saturates near 1.0 for every image, including never-resized ones. The interpolation classifier returns "Bicubic" for all inputs. |
-
-Additionally, the **hash ledger is not tamper-evident** — records are not
-cryptographically chained, so editing the JSON file goes undetected. It proves
-an image matches a record, not that the record is unaltered. **Deepfake
-detection** is a spectral heuristic that has not been validated against real
-GAN-generated images.
+| Module | Boundary |
+| ------ | -------- |
+| **PRNU** | Reference images must match the test image's pixel dimensions. One reference works (+0.28 vs −0.01); several work far better (+0.51 with four). |
+| **Resampling** | Exact integer scaling (2×, 3×) and downscaling are blind spots — a positive result is strong evidence, a negative one is weak. |
+| **Steganography** | Detection scales with how much hidden-data capacity is used; a full embed reads ~100%, a sparse one is invisible to the whole-image test (use the block heatmap). |
+| **Deepfake** | A spectral heuristic, not validated against real GAN output. Treat as a hint only. |
+| **Hash ledger** | Cryptographically chained and tamper-evident, but local — nothing prevents deleting the file and rebuilding it. Anchoring the chain head externally would close that gap. |
 
 ### Additional Features
 
@@ -249,11 +247,11 @@ Identifies duplicated regions within the same image.
 
 #### PRNU Analysis
 
-Extracts noise residual statistics and checks their consistency across the image.
+Recovers the sensor's fixed-pattern noise — a fingerprint unique to one physical
+camera — using wavelet residuals, zero-meaning and Wiener filtering. Supply one
+or more reference photos from a camera to test whether this image came from it.
 
-**Use Case**: Spot regions with inconsistent noise (possible splicing)
-
-⚠️ The camera-matching comparison is currently unreliable — see Known Limitations.
+**Use Case**: Match a photo to its camera; locate regions spliced in from a different sensor
 
 #### Frequency Domain Analysis
 
@@ -269,11 +267,11 @@ Identifies GAN-generated or AI-manipulated faces.
 
 #### Resampling Detection
 
-Looks for the periodic frequency patterns that interpolation leaves behind.
+Interpolation leaves the variance of the second derivative periodic, at a
+frequency of exactly `1 − 1/s` for a scale factor `s` — so the amount of
+rescaling is recoverable, not just its presence.
 
-**Use Case**: Detect resolution manipulation
-
-⚠️ The score does not currently discriminate — see Known Limitations.
+**Use Case**: Detect resolution manipulation and estimate the original size
 
 ## ⚙️ Configuration
 

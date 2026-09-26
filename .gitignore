@@ -40,7 +40,11 @@ temp/
 .coverage
 htmlcov/
 .pytest_cache/
+.mypy_cache/
+# Fixture images built at test time. Each test class cleans up after itself,
+# but an interrupted run leaves them behind - they must never be committed.
 tests/test_images/
+tests/test_*_images/
 
 # Hash verification database (temporary)
 temp/hash_database.json

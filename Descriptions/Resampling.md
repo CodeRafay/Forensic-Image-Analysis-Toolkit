@@ -1,31 +1,30 @@
 # 🔀 Resampling Detection
 
-> ## ⚠️ Known Limitation — The Score Is Not Currently Meaningful
+> ## 📌 It Recovers The Scale Factor, Not Just A Yes/No
 >
-> **This module's resampling score saturates and does not discriminate.** A
-> never-resized image scores ~0.94, while the interpretation text says
-> "score > 0.5 suggests likely resampling".
+> When resampling is detected, the tool reports **how much** the image was
+> rescaled. The periodicity sits at exactly `1 − 1/s` for a scale factor `s`,
+> which makes `s` recoverable:
 >
-> | Image | Score |
-> | ----- | ----- |
-> | Native, never resized | 0.944 |
-> | Upscaled 2× | 0.974 |
-> | Downscaled then upscaled | 1.000 |
-> | Nearest-neighbour upscale | 0.947 |
+> | Actually resized by | Reported |
+> | ------------------- | -------- |
+> | 1.05× | 1.05× |
+> | 1.25× | 1.25× |
+> | 1.50× | 1.50× |
+> | 1.90× | 1.90× |
+> | never resized | not detected |
 >
-> **Why:** the test asks whether *any* pixel in a frequency ring exceeds the
-> 95th percentile. Since 5% of all pixels exceed that by definition, and rings
-> contain hundreds to thousands of pixels, nearly every ring fires regardless
-> of the image. 17 of 19 rings fire on a clean photo.
+> Two candidates are sometimes given (e.g. "1.5× or 3×"). That ambiguity is
+> real, not hedging: above 2× the signature folds back below the Nyquist limit,
+> so both readings fit the same measurement.
 >
-> The interpolation classifier has the same problem: it reports "Bicubic" for
-> every input, including nearest-neighbour upscaling, which should be the
-> easiest case to identify.
+> **Read a positive result as strong evidence and a negative as weak.** Two
+> cases are genuine blind spots, and the tool states them in its output:
 >
-> **Treat both outputs as unreliable** until the detector is reimplemented
-> (a correct approach measures periodicity in the *variance of second
-> derivatives*, looking for peaks at frequencies tied to the scaling factor).
-> The description below explains the technique in principle.
+> - **Exact integer scaling** (2×, 3×) lands precisely on the Nyquist limit and
+>   cannot be separated from it
+> - **Downscaling** discards samples rather than manufacturing correlated ones,
+>   so it leaves little to detect
 
 ## What is Resampling Detection?
 
@@ -40,7 +39,9 @@ Think of it like:
 
 ## What Does Resampling Detection Measure?
 
-- **Interpolation patterns** (nearest neighbor, bilinear, bicubic algorithms)
+- **Interpolation kernel** — nearest-neighbour is identified reliably; bilinear,
+  bicubic and Lanczos are reported as a family, since they are not reliably
+  separable from one another on a single image
 - **Scaling factors** (how much the image was enlarged/reduced)
 - **Resampling artifacts** (characteristic grid patterns)
 - **Frequency anomalies** (unusual periodic patterns)

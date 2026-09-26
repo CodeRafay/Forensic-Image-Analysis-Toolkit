@@ -14,7 +14,7 @@ Veritas Forensic Image Analysis Toolkit is a comprehensive, production-ready for
 
 - ✅ 11 forensic analysis techniques fully implemented
 - ✅ 611-line main application with 12-tab interface
-- ✅ 30+ test cases across unit and integration tests
+- ✅ 115 test cases across unit and integration tests
 - ✅ Comprehensive documentation (API, techniques, deployment)
 - ✅ Production-ready deployment guides (Streamlit Cloud, Heroku, Docker, AWS)
 - ✅ Git repository with clean commit history
@@ -76,9 +76,10 @@ Veritas Forensic Image Analysis Toolkit is a comprehensive, production-ready for
 
 8. **PRNU Analysis** - `analysis/prnu.py`
 
-   - Sensor fingerprint extraction
-   - Wiener filter-based noise residual
-   - Variance and correlation metrics
+   - Wavelet noise residual, zero-meaned and Wiener-filtered
+   - Maximum-likelihood fingerprint from one or more reference images
+   - Intensity-modulated correlation for camera matching
+   - Per-block localisation of regions spliced from another sensor
 
 9. **Frequency Domain Analysis** - `analysis/frequency_analysis.py`
 
@@ -97,9 +98,9 @@ Veritas Forensic Image Analysis Toolkit is a comprehensive, production-ready for
     - Radial frequency fingerprinting
 
 11. **Resampling Detection** - `analysis/resampling_detector.py`
-    - Interpolation method classification
-    - Periodicity detection in FFT
-    - Peak counting for resampling evidence
+    - Second-derivative periodicity (Gallagher)
+    - Scale-factor recovery from the peak frequency (1 - 1/s)
+    - Nearest-neighbour identification via lattice duplication
 
 #### User Interface
 
@@ -119,16 +120,21 @@ Veritas Forensic Image Analysis Toolkit is a comprehensive, production-ready for
 
 **Unit Tests**:
 
-- `tests/test_ela.py`: 11 test cases covering basic ELA, quality parameters, metrics, edge cases (PNG, small/large images)
+- `tests/test_ela.py`: 10 test cases covering basic ELA, quality parameters, metrics, edge cases (PNG, small/large images)
 - `tests/test_metadata.py`: 9 test cases for EXIF extraction, format handling, structure validation
+- `tests/test_hash_verification.py`: 18 test cases for hashing, matching and the ledger
+- `tests/test_steganography_detection.py`: 17 test cases for the PoV attack and randomness gate
 
 **Integration Tests** - `tests/test_integration.py`:
 
-- End-to-end workflow testing
-- Authentic vs manipulated image comparison
-- Multi-quality analysis workflows
-- Cross-module consistency tests
-- Performance tests (small/large images, batch processing)
+- Every technique runs end-to-end and returns its documented contract
+- Behavioural checks: CMFD finds a planted clone, steganography separates
+  clean from embedded, PRNU matches the right camera, resampling recovers the
+  scale factor, the ledger detects tampering
+- Metric regression tests, which assert each score actually *varies* with the
+  thing it measures (several metrics were previously constant for all inputs)
+- App-contract tests, asserting every dict key `app.py` reads unguarded exists
+- Error handling: modules report failure in their return value, never raise
 - Format compatibility tests (JPEG, PNG, grayscale, RGBA)
 
 **Test Configuration**:
@@ -582,7 +588,7 @@ Veritas Forensic Image Analysis Toolkit v1.0.0 represents a **production-ready**
 1. **Comprehensive**: 11 techniques cover most forgery types
 2. **Accessible**: Web-based UI eliminates installation barriers
 3. **Documented**: 15,000 words of documentation
-4. **Tested**: 30+ test cases, >70% coverage
+4. **Tested**: 115 test cases, >70% coverage
 5. **Deployable**: 4 deployment options documented
 
 **Ready For**:

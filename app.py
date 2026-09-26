@@ -1010,17 +1010,25 @@ if file_path is not None:
             "unique sensor fingerprints that can identify the camera or detect spliced regions."
         )
 
-        # Optional reference image
-        st.markdown("### 📂 Optional: Reference Image")
+        # Optional reference images
+        st.markdown("### 📂 Optional: Reference Images")
         st.write(
-            "Upload a reference image from the same camera for correlation analysis")
-        reference_file = st.file_uploader("Reference Image (Optional)", type=[
-                                          "jpg", "jpeg", "png"], key="prnu_ref")
+            "Upload one or more photos from a known camera to test whether this "
+            "image came from that sensor. More references give a cleaner "
+            "fingerprint — matching strength roughly doubles going from one "
+            "reference to two. They must have the same pixel dimensions as the "
+            "image being analysed."
+        )
+        reference_files = st.file_uploader(
+            "Reference Image(s) (Optional)", type=["jpg", "jpeg", "png"],
+            key="prnu_ref", accept_multiple_files=True)
 
         reference_path = None
-        if reference_file:
-            reference_path = save_uploaded_file(reference_file)
-            st.success(f"✅ Reference image loaded: {reference_file.name}")
+        if reference_files:
+            reference_path = [save_uploaded_file(f) for f in reference_files]
+            st.success(
+                f"✅ {len(reference_path)} reference image(s) loaded: "
+                + ", ".join(f.name for f in reference_files))
 
         if st.button("🚀 Analyze PRNU", type="primary"):
             with st.spinner("Extracting sensor fingerprint..."):
@@ -1068,24 +1076,44 @@ if file_path is not None:
                             st.subheader("🔗 Reference Correlation Analysis")
 
                             corr = result['correlation_analysis']
-                            col_corr1, col_corr2 = st.columns(2)
 
-                            with col_corr1:
-                                correlation = corr.get('correlation', 0)
-                                color = "🟢" if correlation > 0.7 else (
-                                    "🟡" if correlation > 0.4 else "🔴")
-                                st.metric("Correlation Coefficient",
-                                          f"{color} {correlation:.4f}")
+                            if corr.get('error'):
+                                st.error(f"❌ {corr['error']}")
+                            else:
+                                col_corr1, col_corr2, col_corr3 = st.columns(3)
 
-                            with col_corr2:
-                                likelihood = corr.get(
-                                    'same_camera_likelihood', 'Unknown')
-                                st.metric("Same Camera Likelihood", likelihood)
+                                with col_corr1:
+                                    correlation = corr.get('correlation', 0)
+                                    color = "🟢" if correlation > 0.15 else (
+                                        "🟡" if correlation > 0.05 else "🔴")
+                                    st.metric("Correlation",
+                                              f"{color} {correlation:.4f}")
 
-                            st.info(
-                                "💡 High correlation (>0.7) suggests same camera source. "
-                                "Low correlation may indicate different camera or spliced regions."
-                            )
+                                with col_corr2:
+                                    st.metric("Same Camera Likelihood",
+                                              corr.get('same_camera_likelihood', 'Unknown'))
+
+                                with col_corr3:
+                                    st.metric("Reference Images Used",
+                                              corr.get('reference_images_used', 0))
+
+                                st.info(
+                                    "💡 Non-matching sensors correlate within about ±0.012 "
+                                    "of zero. Above 0.05 means the same sensor; above 0.15 "
+                                    "means it confidently. Upload more reference images to "
+                                    "strengthen the fingerprint."
+                                )
+
+                                blocks = corr.get('suspicious_blocks')
+                                if blocks:
+                                    st.warning(
+                                        f"🚨 {len(blocks)} image block(s) carry none of this "
+                                        f"camera's fingerprint — likely spliced in from a "
+                                        f"different sensor.")
+                                    st.caption(
+                                        "Block grid positions (row, col), 64px blocks:")
+                                    st.write(", ".join(
+                                        f"({b['row']}, {b['col']})" for b in blocks))
 
                         # Warnings
                         if result.get('warnings'):
@@ -1609,75 +1637,58 @@ if file_path is not None:
                     result = analysis.resampling_detector.detect_resampling(
                         file_path)
 
-                    if result.get('status') == 'success':
+                    if result.get('status') == 'analysis_complete':
                         # Resampling Detection Result
                         st.markdown("---")
                         st.subheader("🎯 Detection Result")
 
                         col_r1, col_r2, col_r3 = st.columns(3)
 
+                        detected = result['resampling_detected']
                         with col_r1:
-                            detected = result.get('resampled', False)
                             indicator = "🔴" if detected else "🟢"
                             status = "DETECTED" if detected else "NOT DETECTED"
                             st.metric("Resampling", f"{indicator} {status}")
 
                         with col_r2:
-                            if 'confidence' in result:
-                                confidence = result['confidence']
-                                st.metric("Confidence", f"{confidence:.2%}")
+                            st.metric("Score", f"{result['resampling_score']:.2f}")
+                            st.caption(
+                                f"peak {result['peak_prominence']:.0f} vs "
+                                f"threshold {result['detection_threshold']:.0f}")
 
                         with col_r3:
-                            if 'periodicity_score' in result.get('metrics', {}):
-                                score = result['metrics']['periodicity_score']
-                                st.metric("Periodicity Score", f"{score:.3f}")
+                            scales = result.get('estimated_scale_factors') or []
+                            st.metric(
+                                "Scale Factor",
+                                " or ".join(f"{s:g}×" for s in scales) if scales else "—")
+                            if result.get('detected_axis'):
+                                st.caption(f"along the {result['detected_axis']} axis")
 
-                        # Detailed Metrics
-                        if result.get('metrics'):
-                            st.markdown("---")
-                            st.subheader("📊 Analysis Metrics")
-
-                            metrics = result['metrics']
-                            col_m1, col_m2 = st.columns(2)
-
-                            with col_m1:
-                                if 'peak_count' in metrics:
-                                    st.metric("Detected Peaks",
-                                              metrics['peak_count'])
-                                if 'variance_ratio' in metrics:
-                                    st.metric("Variance Ratio",
-                                              f"{metrics['variance_ratio']:.3f}")
-
-                            with col_m2:
-                                if 'estimated_scale_factor' in metrics:
-                                    st.metric(
-                                        "Est. Scale Factor", f"{metrics['estimated_scale_factor']:.2f}")
-                                if 'direction' in metrics:
-                                    st.metric(
-                                        "Direction", metrics['direction'])
-
-                        # Visualization if available
-                        if result.get('periodicity_map_path'):
-                            st.markdown("---")
-                            st.subheader("🖼️ Periodicity Map")
-                            st.image(result['periodicity_map_path'],
-                                     caption="Resampling Artifact Visualization",
-                                     width='stretch')
-
-                        # Warnings
-                        if result.get('warnings'):
-                            st.markdown("---")
-                            for warning in result['warnings']:
-                                st.warning(f"⚠️ {warning}")
-                        else:
-                            st.success("✅ No resampling artifacts detected")
+                        # Per-axis detail
+                        st.markdown("---")
+                        st.subheader("📊 Per-Axis Evidence")
+                        st.dataframe({
+                            "Axis": list(result['per_axis'].keys()),
+                            "Peak prominence": [
+                                v['peak_prominence'] for v in result['per_axis'].values()],
+                            "Peak frequency": [
+                                v['peak_frequency'] for v in result['per_axis'].values()],
+                            "Scale candidates": [
+                                ", ".join(f"{c:g}×" for c in v['scale_candidates']) or "—"
+                                for v in result['per_axis'].values()],
+                        }, width='stretch')
 
                         # Interpretation
                         if result.get('interpretation'):
                             st.info(f"💡 {result['interpretation']}")
 
+                        with st.expander("⚠️ What this test cannot see"):
+                            for limitation in result.get('limitations', []):
+                                st.markdown(f"- {limitation}")
+
                     else:
-                        st.json(result)
+                        st.error(
+                            f"❌ Analysis Error: {result.get('error', 'Unknown error')}")
 
                 except Exception as e:
                     st.error(f"❌ Resampling Detection Error: {str(e)}")
@@ -1694,57 +1705,39 @@ if file_path is not None:
                     result = analysis.resampling_detector.detect_interpolation_method(
                         file_path)
 
-                    if result.get('status') == 'success':
+                    if result.get('status') == 'analysis_complete':
                         # Method Identification
                         st.markdown("---")
-                        st.subheader("🎯 Identified Method")
+                        st.subheader("🎯 Identified Kernel")
 
-                        col_i1, col_i2 = st.columns(2)
+                        confidence = result['confidence']
+                        color = {"High": "🟢", "Low": "🟡",
+                                 "N/A": "⚪", "None": "⚪"}.get(confidence, "🟡")
+                        st.metric("Interpolation Kernel",
+                                  result['likely_interpolation'])
+                        st.caption(f"{color} Confidence: {confidence}")
 
+                        st.markdown("---")
+                        st.subheader("📈 Supporting Measurements")
+                        col_i1, col_i2, col_i3 = st.columns(3)
                         with col_i1:
-                            method = result.get('method', 'Unknown')
-                            st.metric("Interpolation Method", method)
-
+                            st.metric("Duplication Rate",
+                                      f"{result['duplication_rate']:.3f}")
+                            st.caption("share of identical neighbours")
                         with col_i2:
-                            if 'confidence' in result:
-                                confidence = result['confidence']
-                                color = "🟢" if confidence > 0.7 else (
-                                    "🟡" if confidence > 0.4 else "🔴")
-                                st.metric("Confidence",
-                                          f"{color} {confidence:.2%}")
+                            st.metric("Duplication Periodicity",
+                                      f"{result['duplication_periodicity']:.0f}")
+                            st.caption("high = copied on a fixed lattice")
+                        with col_i3:
+                            st.metric("Overshoot Ratio",
+                                      f"{result['overshoot_ratio']:.3f}")
+                            st.caption("ringing from cubic/sinc kernels")
 
-                        # Classification scores
-                        if result.get('method_scores'):
-                            st.markdown("---")
-                            st.subheader("📈 Method Classification Scores")
-
-                            import pandas as pd
-                            scores_df = pd.DataFrame([
-                                {"Method": method, "Score": f"{score:.4f}"}
-                                for method, score in result['method_scores'].items()
-                            ]).sort_values(by="Score", ascending=False)
-
-                            # Characteristics
-                            st.dataframe(scores_df, width='stretch')
-                        if result.get('characteristics'):
-                            st.markdown("---")
-                            st.subheader("🔍 Detected Characteristics")
-                            for char in result['characteristics']:
-                                st.info(f"• {char}")
-
-                        # Warnings
-                        if result.get('warnings'):
-                            st.markdown("---")
-                            for warning in result['warnings']:
-                                st.warning(f"⚠️ {warning}")
-
-                        # Interpretation
-                        if result.get('interpretation'):
-                            st.markdown("---")
-                            st.info(f"💡 {result['interpretation']}")
+                        st.info(f"💡 {result['note']}")
 
                     else:
-                        st.json(result)
+                        st.error(
+                            f"❌ Analysis Error: {result.get('error', 'Unknown error')}")
 
                 except Exception as e:
                     st.error(f"❌ Interpolation Detection Error: {str(e)}")
