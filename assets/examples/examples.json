@@ -1,0 +1,61 @@
+[
+  {
+    "file": "ela_recompressed_patch.jpg",
+    "tab": "ELA",
+    "title": "Patch with a different compression history",
+    "edit": "A 192x128 px patch at x=120, y=400 was saved at JPEG quality 50, pasted back, and the whole image saved at quality 95."
+  },
+  {
+    "file": "ghost_q60_patch.jpg",
+    "tab": "JPEG",
+    "title": "JPEG ghost of an earlier quality-60 save",
+    "edit": "Same kind of edit: a 192x128 px patch at x=120, y=400 saved at quality 60, pasted in, whole image saved at quality 90."
+  },
+  {
+    "file": "noise_smoothed_region.jpg",
+    "tab": "Noise",
+    "title": "Region smoothed with a retouch brush",
+    "edit": "An iPhone 5c photo (of a watercolour painting) with an 800x600 px region at x=1300, y=900 smoothed by a Gaussian blur (sigma 1.5), as a denoise or retouch brush would. Saved at quality 92."
+  },
+  {
+    "file": "source/iphone5c_01.jpg",
+    "tab": "PRNU",
+    "title": "Matched to its camera by sensor noise",
+    "edit": "An unedited iPhone 5c photo. Its sensor fingerprint is compared with one built from three other photos taken with the same phone, which the app loads as references automatically.",
+    "references": [
+      "source/iphone5c_10.jpg",
+      "source/iphone5c_27.jpg",
+      "source/iphone5c_15.jpg"
+    ]
+  },
+  {
+    "file": "copy_move_clone.jpg",
+    "tab": "Copy-Move",
+    "title": "Cloned block of the city",
+    "edit": "The 192x128 px block at x=120, y=400 was copied to x=700, y=300. Saved at quality 95. The two smaller cloud clones it also finds were already in the original sample, which is itself a composite."
+  },
+  {
+    "file": "resampled_upscale.png",
+    "tab": "Resampling",
+    "title": "Image enlarged 1.5x",
+    "edit": "The whole image was enlarged 1.5x with bicubic interpolation and saved as PNG."
+  },
+  {
+    "file": "histogram_contrast.png",
+    "tab": "Histogram",
+    "title": "Contrast stretched",
+    "edit": "Levels were stretched (value = (value - 60) x 1.6) and the result saved as PNG."
+  },
+  {
+    "file": "stego_lsb.png",
+    "tab": "Steganography",
+    "title": "Data hidden in the lowest bits",
+    "edit": "Random bits were written into the least significant bit of 40 % of the pixel values (a payload of 0.4 bits per pixel), saved as PNG."
+  },
+  {
+    "file": "metadata_inconsistent.jpg",
+    "tab": "Metadata",
+    "title": "Contradictory camera metadata",
+    "edit": "EXIF claims a Canon EOS 5D Mark IV, names Adobe Photoshop as the software, and gives a modification date six weeks before the capture date."
+  }
+]

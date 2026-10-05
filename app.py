@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 import shutil
 import tempfile
@@ -20,11 +21,11 @@ MAX_CACHED_RESULTS = 3  # results hold image arrays; bound per-session memory
 STALE_SESSION_S = 3600  # sweep other sessions' temp dirs older than this
 
 st.set_page_config(page_title="Veritas - Digital Forensics",
-                   page_icon="🔍", layout="wide")
+                   page_icon=":material/search:", layout="wide")
 
 DEFAULT_SAMPLE_IMAGE = os.path.join("assets", "sample images", "sampleImg.jpeg")
+EXAMPLES_DIR = os.path.join("assets", "examples")  # built by scripts/make_examples.py
 HEAVY_MAX_PX = 2048  # in-memory cap for dense CMFD; never a JPEG re-save
-LEVEL_ICON = {"warning": "⚠️", "notice": "🔎", "info": "ℹ️"}
 
 
 # ── Session storage ───────────────────────────────────────────────
@@ -100,7 +101,7 @@ def render(result):
             col.metric(label, value)
 
     for f in result["findings"]:
-        text = f"{LEVEL_ICON[f['level']]} {esc(f['text'])}"
+        text = esc(f["text"])
         if f["level"] == "warning":
             st.warning(text)
         elif f["level"] == "notice":
@@ -162,11 +163,21 @@ def describe(name):
 
 
 # ── Sidebar ───────────────────────────────────────────────────────
-st.sidebar.markdown("#### 🔍 Veritas")
+st.sidebar.markdown("#### Veritas")
 uploaded = st.sidebar.file_uploader("Upload an image to analyse",
                                     type=["jpg", "jpeg", "png"])
+try:
+    with open(os.path.join(EXAMPLES_DIR, "examples.json"), encoding="utf-8") as f:
+        EXAMPLES = {f"{e['tab']}: {e['title']}": e for e in json.load(f)}
+except OSError:
+    EXAMPLES = {}
+example = None
 if uploaded is None and os.path.exists(DEFAULT_SAMPLE_IMAGE):
-    st.sidebar.caption("📸 No upload — using the bundled sample image.")
+    choice = st.sidebar.selectbox(
+        "Or try an example", ["Sample image (bundled)", *EXAMPLES],
+        help="Each example is the sample image with one known edit that the "
+             "named technique detects.")
+    example = EXAMPLES.get(choice)
 
 # ── Image selection ───────────────────────────────────────────────
 if uploaded is not None:
@@ -183,11 +194,14 @@ if uploaded is not None:
     file_path = st.session_state.image_path
     image_name = st.session_state.image_name
 elif os.path.exists(DEFAULT_SAMPLE_IMAGE):
-    if st.session_state.get("image_digest") != "sample":
-        st.session_state.image_digest = "sample"
+    file_path, image_name = DEFAULT_SAMPLE_IMAGE, "Sample image (bundled)"
+    if example:
+        file_path = os.path.join(EXAMPLES_DIR, example["file"])
+        image_name = f"Example: {example['title']}"
+    if st.session_state.get("image_digest") != file_path:
+        st.session_state.image_digest = file_path
         st.session_state.results = {}
         st.session_state.evicted = set()
-    file_path, image_name = DEFAULT_SAMPLE_IMAGE, "Sample image (bundled)"
 else:
     file_path = image_name = None
 
@@ -221,13 +235,21 @@ col_img, col_info = st.columns([1, 2])
 col_img.image(file_path, caption=image_name, width="stretch")
 with col_info:
     st.markdown(f"**Analysing:** {esc(image_name)}")
+    with Image.open(file_path) as _im:
+        _fmt, (_w, _h) = _im.format, _im.size
+    st.markdown(f"{_fmt} · {_w} × {_h} px · "
+                f"{os.path.getsize(file_path) / 1024:,.0f} KB")
+    if example:
+        st.info(f"**What was done:** {example['edit']}\n\n"
+                f"Open the **{example['tab']}** tab and run it to see the "
+                "edit detected.")
     st.caption("All analyses read the original file bytes. Nothing is "
                "re-encoded before analysis.")
 
 tabs = st.tabs([
-    "🕵️ ELA", "📋 Metadata", "📊 Histogram", "🌫️ Noise", "💾 JPEG",
-    "🔄 Copy-Move", "📡 PRNU", "📈 Frequency", "🔀 Resampling",
-    "🧪 Synthetic traces", "🔐 Steganography", "🔑 Hash ledger", "ℹ️ About",
+    "ELA", "Metadata", "Histogram", "Noise", "JPEG", "Copy-Move", "PRNU",
+    "Frequency", "Resampling", "Synthetic traces", "Steganography",
+    "Hash ledger", "About",
 ])
 
 with tabs[0]:
@@ -288,6 +310,10 @@ with tabs[6]:
         if digest not in saved or not os.path.exists(saved[digest]):
             saved[digest] = save_upload(r, "prnu_refs")
         ref_paths.append(saved[digest])
+    if not ref_paths and example and example.get("references"):
+        ref_paths = [os.path.join(EXAMPLES_DIR, r) for r in example["references"]]
+        st.caption(f"Using the example's {len(ref_paths)} reference photos "
+                   "from the same camera.")
     ref_paths = ref_paths or None
     run_panel("prnu", "Analyse PRNU", analysis.prnu.analyze_prnu,
               file_path, reference_paths=ref_paths)
@@ -346,27 +372,31 @@ with tabs[11]:
         label = st.text_input("Label for this image", value=image_name,
                               key=f"ledger_label_{st.session_state.image_digest}")
         note = st.text_input("Note (optional)", key="ledger_note")
-        if st.button("➕ Add current image to ledger"):
+        if st.button("Add current image to ledger"):
             ledger, rec = hv.add_record(ledger, file_path, label=label, note=note)
             st.session_state.ledger = ledger
             st.success(f"Added record #{rec['id']}")
     with c2:
-        run_panel("hash_verify", "🔎 Check current image against ledger",
+        run_panel("hash_verify", "Check current image against ledger",
                   hv.verify_image, ledger, file_path)
 
     st.markdown("---")
-    st.json(hv.ledger_stats(ledger))
+    stats = hv.ledger_stats(ledger)
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Records", stats["records"])
+    m2.metric("Last added (UTC)", (stats["last_utc"] or "-")[:16].replace("T", " "))
+    m3.metric("Hash chain", "Valid" if stats["chain_valid"] else "Broken")
     e1, e2 = st.columns(2)
     with e1:
         st.download_button(
-            "📤 Export ledger", hv.export_ledger(ledger, key),
+            "Export ledger", hv.export_ledger(ledger, key),
             file_name="veritas-ledger.json", mime="application/json",
             disabled=not ledger)
         st.caption("Signed with HMAC-SHA256 (server key)" if key else
                    "Unkeyed SHA-256 digest: detects accidental change only — "
                    "anyone can re-sign an edited file.")
     with e2:
-        imp = st.file_uploader("📥 Import a ledger", type=["json"],
+        imp = st.file_uploader("Import a ledger", type=["json"],
                                key="ledger_import")
         if imp is not None and st.button("Merge imported ledger"):
             try:

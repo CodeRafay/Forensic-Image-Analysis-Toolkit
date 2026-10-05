@@ -86,6 +86,22 @@ and its EXIF thumbnail no longer matches the image. That makes it a good demo
 (Metadata, Copy-Move and several JPEG tabs report findings), but do not use
 it to judge what a clean photo looks like.
 
+## Example gallery
+
+`assets/examples/` holds nine images, each with one known edit or property
+that a technique detects: a recompressed patch (ELA), a JPEG ghost, a cloned
+block (Copy-Move), a 1.5x upscale (Resampling), a contrast stretch
+(Histogram), an LSB payload (Steganography), contradictory EXIF (Metadata),
+a smoothed region (Noise) and a camera match (PRNU). Pick one in the
+sidebar's "Or try an example" box; the app says what was done and which tab
+detects it, and the PRNU example loads its reference photos itself.
+
+The first seven are edits of the bundled sample. Noise and PRNU need real
+full-resolution camera noise, so they use four CC0 iPhone 5c photos from
+Wikimedia Commons (credits in `assets/examples/source/CREDITS.md`).
+`python scripts/make_examples.py` rebuilds everything and exits non-zero if a
+technique stops catching its example.
+
 ## 📋 Requirements
 
 - Python 3.10 (pinned in `.python-version`; `requirements.txt` pins the
@@ -181,7 +197,8 @@ Forensic-Image-Analysis-Toolkit/
 │
 └── assets/
     ├── style.css
-    └── sample images/sampleImg.jpeg  # Fabricated demo image (see above)
+    ├── sample images/sampleImg.jpeg  # Fabricated demo image (see above)
+    └── examples/                     # One known edit per technique (see above)
 ```
 
 ## 🌐 Deployment
