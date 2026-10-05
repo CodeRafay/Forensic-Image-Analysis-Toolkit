@@ -1,474 +1,142 @@
-# Deployment Guide - Veritas Forensic Image Analysis Toolkit
+# Deployment Guide — Veritas
 
-This guide covers multiple deployment options for the Veritas application.
-
----
-
-## Table of Contents
-
-1. [Local Development Setup](#local-development)
-2. [Streamlit Cloud Deployment](#streamlit-cloud)
-3. [Heroku Deployment](#heroku)
-4. [Docker Deployment](#docker)
-5. [AWS Deployment](#aws)
-6. [Production Considerations](#production)
+Veritas is a single Streamlit app (`app.py`) with no database and no external
+services. Everything a visitor does (uploads, results, hash ledger) lives in
+their Streamlit session.
 
 ---
 
-## Local Development
+## Local
 
-### Requirements
-
-- Python 3.9+
-- 2GB RAM minimum
-- 5GB disk space
-
-### Setup Steps
+Python 3.10 (see `.python-version`).
 
 ```bash
-# Clone repository
 git clone https://github.com/CodeRafay/Forensic-Image-Analysis-Toolkit.git
 cd Forensic-Image-Analysis-Toolkit
-
-# Create virtual environment
-python -m venv venv
-
-# Activate virtual environment
-# Windows:
-venv\Scripts\activate
-# macOS/Linux:
-source venv/bin/activate
-
-# Install dependencies
+python -m venv .venv
+.venv\Scripts\activate          # Windows
+source .venv/bin/activate       # macOS/Linux
 pip install -r requirements.txt
-
-# Run application
-streamlit run app.py
+streamlit run app.py            # http://localhost:8501
 ```
 
-The app will be available at `http://localhost:8501`
+Check the install with `python -m unittest discover -s tests -t .` (142 tests).
 
 ---
 
-## Streamlit Cloud
+## Streamlit Community Cloud
 
-### Prerequisites
+1. Push the repository to GitHub.
+2. At [share.streamlit.io](https://share.streamlit.io): **New app** → repository,
+   branch, main file `app.py` → **Deploy**.
+3. Python 3.10 is taken from `.python-version`. Dependencies install from the
+   pinned `requirements.txt`; no `packages.txt` is needed
+   (`opencv-python-headless`, `c2pa-python` and the rest ship wheels).
+4. **Optional secret** — App settings → Secrets:
 
-- GitHub account
-- GitHub repository with your code
-
-### Deployment Steps
-
-1. **Push Code to GitHub**
-
-   ```bash
-   git add .
-   git commit -m "Prepare for deployment"
-   git push origin main
+   ```toml
+   LEDGER_KEY = "a long random string"
    ```
 
-2. **Sign in to Streamlit Cloud**
+   With it, ledger exports are signed with HMAC-SHA256 and imports verify the
+   signature. Without it, exports carry a plain SHA-256 digest labelled
+   "detects accidental change only". Rotating the key invalidates old
+   signatures. Locally, the same key goes in `.streamlit/secrets.toml`
+   (gitignored).
 
-   - Go to [share.streamlit.io](https://share.streamlit.io)
-   - Click "Sign in with GitHub"
-   - Authorize Streamlit Cloud
+Notes:
 
-3. **Deploy New App**
-
-   - Click "New app"
-   - Select your repository: `CodeRafay/Forensic-Image-Analysis-Toolkit`
-   - Branch: `main`
-   - Main file: `app.py`
-   - Click "Deploy"
-
-4. **Configure Secrets** (if needed)
-
-   - Go to App settings → Secrets
-   - Add any API keys or secrets in TOML format
-
-5. **Custom Domain** (optional)
-   - Go to App settings → General
-   - Add custom domain under "Custom subdomain"
-
-### Streamlit Cloud Limits
-
-- Free tier: 1GB resources per app
-- 3 public apps maximum
-- Automatic updates from GitHub
-
----
-
-## Heroku
-
-### Prerequisites
-
-- Heroku account
-- Heroku CLI installed
-
-### Setup Files
-
-**Create `Procfile`:**
-
-```
-web: streamlit run app.py --server.port $PORT --server.enableCORS false
-```
-
-**Create `setup.sh`:**
-
-```bash
-mkdir -p ~/.streamlit/
-echo "\
-[server]\n\
-headless = true\n\
-port = $PORT\n\
-enableCORS = false\n\
-\n\
-" > ~/.streamlit/config.toml
-```
-
-**Update `requirements.txt`** (add):
-
-```
-gunicorn==20.1.0
-```
-
-### Deployment Steps
-
-```bash
-# Login to Heroku
-heroku login
-
-# Create new app
-heroku create veritas-forensics
-
-# Deploy
-git add .
-git commit -m "Prepare for Heroku"
-git push heroku main
-
-# Open app
-heroku open
-
-# View logs
-heroku logs --tail
-```
-
-### Heroku Configuration
-
-```bash
-# Set buildpack
-heroku buildpacks:set heroku/python
-
-# Scale dyno
-heroku ps:scale web=1
-
-# Set environment variables
-heroku config:set STREAMLIT_THEME_BASE=dark
-```
+- **The ledger is per session.** It is not shared between visitors and is
+  lost when the session ends unless the visitor exports it.
+- Uploads go to a per-session directory under the system temp dir with random
+  names; nothing is shared between sessions. The container's temp storage is
+  discarded on restart.
+- `.streamlit/config.toml` sets `showErrorDetails = "type"`, so visitors see
+  the exception type, not a traceback.
+- Resource limits on the free tier are tight (about 1 GB RAM). The heaviest
+  tabs are Copy-Move (in-memory downscale to 2048 px), PRNU (centre crop to
+  2048 px) and JPEG ghosts (10 recompressions).
 
 ---
 
 ## Docker
 
-### Dockerfile
-
-Create `Dockerfile`:
+`Dockerfile`:
 
 ```dockerfile
-FROM python:3.9-slim
-
+FROM python:3.10-slim
 WORKDIR /app
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy requirements and install Python dependencies
+# No system packages needed: all dependencies ship manylinux wheels.
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy application files
 COPY . .
-
-# Expose Streamlit port
 EXPOSE 8501
-
-# Health check
-HEALTHCHECK CMD curl --fail http://localhost:8501/_stcore/health || exit 1
-
-# Run application
+HEALTHCHECK CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')" || exit 1
 CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
 ```
 
-### Docker Compose
-
-Create `docker-compose.yml`:
-
-```yaml
-version: "3.8"
-
-services:
-  veritas:
-    build: .
-    ports:
-      - "8501:8501"
-    volumes:
-      - ./temp:/app/temp
-    environment:
-      - STREAMLIT_THEME_BASE=dark
-    restart: unless-stopped
-```
-
-### Build and Run
-
 ```bash
-# Build image
-docker build -t veritas-forensics .
-
-# Run container
-docker run -p 8501:8501 veritas-forensics
-
-# Or use docker-compose
-docker-compose up -d
-
-# View logs
-docker-compose logs -f
-
-# Stop container
-docker-compose down
+docker build -t veritas .
+docker run -p 8501:8501 veritas
+# optional HMAC key for ledger exports:
+docker run -p 8501:8501 -v "$PWD/secrets.toml:/app/.streamlit/secrets.toml:ro" veritas
 ```
 
----
-
-## AWS Deployment
-
-### Option 1: EC2 Instance
-
-1. **Launch EC2 Instance**
-
-   - AMI: Ubuntu 22.04
-   - Instance type: t2.medium (minimum)
-   - Security group: Allow port 8501
-
-2. **SSH into Instance**
-
-   ```bash
-   ssh -i your-key.pem ubuntu@ec2-xxx.compute.amazonaws.com
-   ```
-
-3. **Setup Application**
-
-   ```bash
-   # Update system
-   sudo apt update && sudo apt upgrade -y
-
-   # Install Python
-   sudo apt install python3.9 python3-pip -y
-
-   # Clone repository
-   git clone https://github.com/CodeRafay/Forensic-Image-Analysis-Toolkit.git
-   cd Forensic-Image-Analysis-Toolkit
-
-   # Install dependencies
-   pip3 install -r requirements.txt
-
-   # Run with nohup
-   nohup streamlit run app.py --server.port 8501 &
-   ```
-
-4. **Setup Nginx (optional)**
-
-   ```bash
-   sudo apt install nginx -y
-   ```
-
-   Create `/etc/nginx/sites-available/veritas`:
-
-   ```nginx
-   server {
-       listen 80;
-       server_name your-domain.com;
-
-       location / {
-           proxy_pass http://localhost:8501;
-           proxy_http_version 1.1;
-           proxy_set_header Upgrade $http_upgrade;
-           proxy_set_header Connection 'upgrade';
-           proxy_set_header Host $host;
-           proxy_cache_bypass $http_upgrade;
-       }
-   }
-   ```
-
-   Enable site:
-
-   ```bash
-   sudo ln -s /etc/nginx/sites-available/veritas /etc/nginx/sites-enabled/
-   sudo nginx -t
-   sudo systemctl restart nginx
-   ```
-
-### Option 2: Elastic Beanstalk
-
-1. **Install EB CLI**
-
-   ```bash
-   pip install awsebcli
-   ```
-
-2. **Initialize EB**
-
-   ```bash
-   eb init -p python-3.9 veritas-forensics --region us-east-1
-   ```
-
-3. **Create Environment**
-
-   ```bash
-   eb create veritas-production
-   ```
-
-4. **Deploy Updates**
-   ```bash
-   eb deploy
-   ```
+No volumes are required: the app keeps no state on disk between sessions.
 
 ---
 
-## Production Considerations
+## Own server (VM) behind nginx
 
-### Performance Optimization
+Run `streamlit run app.py --server.port 8501` under a process manager
+(systemd, supervisor) and proxy it. Streamlit uses WebSockets, so forward the
+upgrade headers:
 
-1. **Image Caching**
+```nginx
+server {
+    listen 80;
+    server_name your-domain.com;
+    location / {
+        proxy_pass http://localhost:8501;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_read_timeout 86400;
+    }
+}
+```
 
-   - Cache processed results
-   - Use Redis for session storage
+Add TLS (e.g. Let's Encrypt).
 
-2. **Resource Limits**
+---
 
-   - Set max upload size: `maxUploadSize=200` in config.toml
-   - Limit concurrent users
+## Production considerations
 
-3. **Monitoring**
-   - Add application monitoring (New Relic, Datadog)
-   - Set up error tracking (Sentry)
-
-### Security
-
-1. **HTTPS**
-
-   - Use Let's Encrypt for SSL certificates
-   - Configure SSL in Nginx/load balancer
-
-2. **Authentication** (if needed)
-
-   - Add authentication layer
-   - Use environment variables for secrets
-
-3. **Rate Limiting**
-   - Implement API rate limiting
-   - Use Cloudflare for DDoS protection
-
-### Backup & Recovery
-
-1. **Database Backup** (if applicable)
-
-   - Schedule regular backups
-   - Test recovery procedures
-
-2. **File Storage**
-   - Use S3 or cloud storage for uploads
-   - Implement automatic cleanup of temp files
-
-### Scalability
-
-1. **Horizontal Scaling**
-
-   - Use load balancer
-   - Deploy multiple instances
-
-2. **Vertical Scaling**
-   - Upgrade instance size as needed
-   - Monitor resource usage
-
-### Maintenance
-
-1. **Updates**
-
-   ```bash
-   # Pull latest code
-   git pull origin main
-
-   # Install new dependencies
-   pip install -r requirements.txt --upgrade
-
-   # Restart application
-   # (method depends on deployment)
-   ```
-
-2. **Logs**
-
-   - Rotate logs regularly
-   - Archive old logs
-
-3. **Monitoring**
-   - Set up uptime monitoring
-   - Configure alerts for downtime
+- **Upload size**: Streamlit's default limit is 200 MB; lower it with
+  `server.maxUploadSize` in `config.toml` if memory is tight.
+- **Several instances**: session state (results, ledger) is in process memory,
+  so a load balancer needs sticky sessions.
+- **Temp cleanup**: per-session directories are created with
+  `tempfile.mkdtemp`; on a long-running server, clean old `veritas_*`
+  directories in the temp dir periodically.
+- **Secrets**: keep `LEDGER_KEY` in the host's secret store, never in git.
+- **What the ledger is not**: server-clock timestamps and an HMAC key held by
+  the operator do not make a trusted timestamp or a legal chain of custody
+  (see [Hash_Verification.md](../Descriptions/Hash_Verification.md)).
 
 ---
 
 ## Troubleshooting
 
-### Common Issues
-
-**Port Already in Use**
-
-```bash
-# Find process using port 8501
-netstat -ano | findstr :8501
-
-# Kill process
-taskkill /PID <pid> /F
-```
-
-**Module Not Found**
-
-```bash
-# Reinstall dependencies
-pip install -r requirements.txt --force-reinstall
-```
-
-**Memory Issues**
-
-- Increase instance RAM
-- Optimize image processing
-- Add pagination for batch operations
-
-**Slow Performance**
-
-- Enable caching
-- Optimize algorithms
-- Use CDN for static assets
+- **Port in use**: `streamlit run app.py --server.port 8502`.
+- **`ModuleNotFoundError`**: `pip install -r requirements.txt` in the active
+  environment, on Python 3.10.
+- **`c2pa` import fails**: the Metadata tab still runs; C2PA reading reports
+  the error in its findings. Reinstall `c2pa-python` for your platform.
+- **Out of memory on large images**: use a host with more RAM; Copy-Move and
+  PRNU already bound their working size to 2048 px.
 
 ---
 
-## Support
-
-For deployment issues:
-
-- GitHub Issues: https://github.com/CodeRafay/Forensic-Image-Analysis-Toolkit/issues
-- Email: [Add your email]
-
----
-
-## Version History
-
-- **v1.0.0** (2025-12) - Initial release with 11 analysis techniques
-- **v0.9.0** (2025-11) - Beta release with core features
-
----
-
-**Last Updated**: December 2025
+**Last updated**: September 2026 (v3.0.0)

@@ -34,7 +34,7 @@ This project follows a standard code of conduct:
 
 ### Prerequisites
 
-- Python 3.9 or higher
+- Python 3.10 (see `.python-version`)
 - Git
 - GitHub account
 
@@ -60,22 +60,22 @@ This project follows a standard code of conduct:
 ### 1. Create Virtual Environment
 
 ```bash
-python -m venv venv
+python -m venv .venv
 
 # Activate
 # Windows:
-venv\Scripts\activate
+.venv\Scripts\activate
 # macOS/Linux:
-source venv/bin/activate
+source .venv/bin/activate
 ```
 
 ### 2. Install Dependencies
 
 ```bash
-# Production dependencies
+# Runtime dependencies (enough to run the app and the full test suite)
 pip install -r requirements.txt
 
-# Development dependencies
+# Optional: linters/formatters
 pip install -r requirements-dev.txt
 ```
 
@@ -114,19 +114,21 @@ Branch naming conventions:
 
 ### 3. Run Tests
 
+The suite uses the standard-library `unittest` runner; pytest is not needed.
+
 ```bash
-# Run all tests
-pytest
+# All 142 tests (a few minutes)
+python -m unittest discover -s tests -t .
 
-# Run specific test file
-pytest tests/test_ela.py
+# One module
+python -m unittest tests.test_ela
 
-# Run with coverage
-pytest --cov=analysis
-
-# Run integration tests only
-pytest -m integration
+# One test
+python -m unittest tests.test_contract.TestResultContract.test_all_entry_points_all_inputs
 ```
+
+`pytest.ini` is kept for anyone who prefers pytest, but its `addopts` require
+`pytest-cov`; install `requirements-dev.txt` first or run `pytest -o addopts=""`.
 
 ### 4. Format Code
 
@@ -162,54 +164,56 @@ Then create a Pull Request on GitHub.
 
 ## Testing Guidelines
 
-### Writing Tests
+### The result contract
 
-- Place tests in `tests/` directory
-- Name test files `test_*.py`
-- Name test functions `test_*`
-- Use descriptive test names
-
-**Example**:
+Every public analysis function takes an image path (plus keyword options) and
+returns `analysis.util.make_result(...)`:
 
 ```python
-def test_ela_detects_manipulated_region():
-    """Test that ELA highlights edited areas"""
-    # Arrange
-    img_path = create_test_image_with_edit()
-
-    # Act
-    result = perform_ela(img_path)
-
-    # Assert
-    assert result['metrics']['mean_error'] > threshold
+{
+    "status": "ok" | "insufficient_data" | "not_applicable" | "error",
+    "summary": str,                  # one neutral sentence: what was measured
+    "findings": [{"level": "info" | "notice" | "warning", "text": str}],
+    "metrics": {label: number | str},    # headline numbers shown in the UI
+    "images": {caption: uint8 ndarray},  # (H, W) or (H, W, 3), in memory
+    "tables": {title: list[dict] | dict},
+    "limitations": [str],            # always shown
+    "details": {...},                # raw JSON-serialisable values for tests
+}
 ```
 
-### Test Categories
+Rules (the first four are checked by `tests/test_contract.py`):
 
-Mark tests with pytest markers:
+- Never raise. Wrap the body and return `util.error_result(e, LIMITATIONS)`.
+- Too little data (tiny or flat image) must be `insufficient_data` or
+  `not_applicable`, never an `ok` that looks clean.
+- Float metrics must be finite; images must be uint8 arrays.
+- Never claim authenticity. Summaries and findings must not say "authentic",
+  "admissible", "no manipulation" or "proves"; say "no inconsistency found at
+  this sensitivity" instead.
+- Write nothing to disk; return images as arrays.
+- Decode with `util.load_array` (no re-encode, EXIF orientation not applied).
+  Only analyses that do not depend on compression traces may use its
+  in-memory `max_px` downscale.
 
-```python
-@pytest.mark.slow
-def test_large_image_processing():
-    pass
+The app renders every result with one function (`render` in `app.py`), so a
+module can add metrics, images or tables without touching the UI.
 
-@pytest.mark.integration
-def test_full_workflow():
-    pass
-```
+### Writing tests
 
-Run specific categories:
-
-```bash
-pytest -m "not slow"  # Skip slow tests
-pytest -m integration  # Run only integration tests
-```
-
-### Coverage Requirements
-
-- Minimum 70% code coverage
-- All new features must include tests
-- Critical functions should have >90% coverage
+- Each module has `tests/test_<module>.py` (`unittest.TestCase`).
+- **Add every new entry point to `ENTRY_POINTS` in `tests/test_contract.py`.**
+  It is then run on JPEG, PNG, grayscale, RGBA, palette, 16×16, 1×1 and flat
+  inputs.
+- **Calibrate thresholds on a seeded benchmark.** Generate positives and
+  negatives synthetically with `np.random.default_rng(<seed>)` (no downloads):
+  e.g. splices at several JPEG qualities, clean JPEGs q20–100, crops, PNGs.
+  Measure the detection rate and the false-alarm rate, set the module
+  constant to a stated false-alarm rate, cite the measurement in a comment
+  next to the constant and in `Descriptions/<Technique>.md`, and add a test
+  asserting both rates (see `test_splice_benchmark` in `tests/test_ela.py`).
+- A metric must vary with what it measures: check it on a clean image, a
+  manipulated one and a synthetic extreme before relying on it.
 
 ---
 
@@ -232,30 +236,19 @@ Follow **PEP 8** with these specifics:
 Use Google-style docstrings:
 
 ```python
-def analyze_image(image_path: str, threshold: float = 0.5) -> dict:
+def analyze_thing(image_path, window=16):
     """
-    Perform forensic analysis on an image.
+    One-line description of what is measured, then the published method:
+    Author, "Title", Venue Year.
 
     Args:
-        image_path (str): Path to the image file
-        threshold (float): Detection threshold (0.0-1.0)
+        image_path: image file (read as stored, never re-encoded)
+        window: smoothing window in px
 
     Returns:
-        dict: Analysis results containing:
-            - detected (bool): Whether forgery detected
-            - confidence (float): Confidence score
-            - regions (list): List of suspicious regions
-
-    Raises:
-        FileNotFoundError: If image file doesn't exist
-        ValueError: If threshold out of range
-
-    Example:
-        >>> result = analyze_image("photo.jpg", threshold=0.7)
-        >>> print(result['confidence'])
-        0.85
+        util.make_result(...). Metrics: <labels>. Images: <captions>.
+        details: <raw keys used by tests>.
     """
-    pass
 ```
 
 ### Type Hints
@@ -299,11 +292,11 @@ def process_images(
 ### Examples
 
 ```
-feat(ela): add multi-quality comparison mode
+feat(ela): report error relative to the image median
 
-Implement multi_quality_ela() function to analyze images at
-multiple compression levels simultaneously. This helps detect
-forgeries that may only be visible at specific quality settings.
+The high-error mask and percentage now use K x the image's own median
+error, so they no longer depend on brightness or resave quality.
+Calibrated on a seeded splice benchmark (see ela.py).
 
 Closes #42
 ```
@@ -312,7 +305,7 @@ Closes #42
 fix(metadata): handle images without EXIF data
 
 Previously crashed when processing images without EXIF metadata.
-Now returns empty dict with appropriate warning message.
+Now returns an info finding ("No EXIF") in the result contract.
 
 Fixes #58
 ```
@@ -323,8 +316,7 @@ Fixes #58
 
 ### Before Submitting
 
-- [ ] All tests pass (`pytest`)
-- [ ] Code coverage >70% (`pytest --cov`)
+- [ ] All tests pass (`python -m unittest discover -s tests -t .`)
 - [ ] Code formatted (`black .`)
 - [ ] Imports sorted (`isort .`)
 - [ ] No linting errors (`flake8`)
@@ -374,49 +366,28 @@ Add screenshots for UI changes
 
 ### New Forensic Technique
 
-1. **Create module** in `analysis/`:
-
-   ```python
-   # analysis/new_technique.py
-   def analyze_new_technique(image_path: str) -> dict:
-       """
-       Your technique implementation
-       """
-       pass
-   ```
-
-2. **Add tests** in `tests/`:
-
-   ```python
-   # tests/test_new_technique.py
-   def test_new_technique_basic():
-       pass
-   ```
-
-3. **Update app.py**:
-
-   - Add import
-   - Create new tab
-   - Add UI controls
-
-4. **Update documentation**:
-
-   - Add to README.md feature list
-   - Document in docs/API.md
-   - Explain in docs/TECHNIQUES.md
-
-5. **Update requirements.txt** if new dependencies added
+1. **Module** `analysis/<technique>.py` with an entry point returning the
+   result contract. Cite the published method in the module docstring and
+   keep calibrated thresholds as module constants with their measurement.
+   Add the module name to `_MODULE_NAMES` in `analysis/__init__.py`.
+2. **Tests**: `tests/test_<technique>.py` with a seeded benchmark, and an
+   `ENTRY_POINTS` row in `tests/test_contract.py`.
+3. **App**: add a tab in `app.py` that calls
+   `run_panel(key, label, analysis.<module>.<fn>, file_path, ...)` and
+   `describe("<Technique>")`.
+4. **Docs**: `Descriptions/<Technique>.md` (method, what the output means,
+   measured benchmark numbers, limitations), a row in the README technique
+   table, an entry in `docs/API.md`, and a CHANGELOG entry.
+5. **Dependencies**: pin any new package in `requirements.txt`.
 
 ### Example PR Checklist
 
-- [ ] Module created in `analysis/`
-- [ ] Tests added in `tests/`
-- [ ] Integration with `app.py`
-- [ ] README.md updated
-- [ ] API.md documentation added
-- [ ] TECHNIQUES.md explanation added
-- [ ] Example usage provided
-- [ ] Performance considerations documented
+- [ ] Entry point returns `make_result`, never raises
+- [ ] Added to `tests/test_contract.py` `ENTRY_POINTS`
+- [ ] Thresholds calibrated on a seeded benchmark; rates asserted in a test
+- [ ] Tab added in `app.py`
+- [ ] `Descriptions/<Technique>.md`, README, `docs/API.md`, CHANGELOG updated
+- [ ] No wording that claims an image is authentic
 
 ---
 
@@ -444,8 +415,8 @@ If applicable
 **Environment**
 
 - OS: [e.g., Windows 11]
-- Python version: [e.g., 3.9.7]
-- Veritas version: [e.g., 1.0.0]
+- Python version: [e.g., 3.10.11]
+- Veritas version: [e.g., 3.0.0]
 
 **Additional context**
 Any other relevant information
@@ -461,26 +432,19 @@ Any other relevant information
 ## Project Structure
 
 ```
-VeritasForensics/
-├── analysis/           # Core analysis modules
-│   ├── ela.py
-│   ├── metadata_analysis.py
-│   └── ...
-├── tests/              # Test suite
-│   ├── test_ela.py
-│   ├── test_metadata.py
-│   └── test_integration.py
-├── docs/               # Documentation
-│   ├── API.md
-│   ├── TECHNIQUES.md
-│   └── DEPLOYMENT.md
+Forensic-Image-Analysis-Toolkit/
+├── analysis/           # One module per technique + util.py (result contract)
+├── tests/              # test_<module>.py per module + test_contract.py
+├── Descriptions/       # Per-technique guides shown in the app
+├── docs/               # API, deployment, project report
 ├── .streamlit/         # Streamlit configuration
-├── app.py              # Main application
-├── requirements.txt    # Production dependencies
-├── requirements-dev.txt # Development dependencies
-├── pytest.ini          # Pytest configuration
+├── app.py              # Streamlit app (13 tabs, one renderer)
+├── requirements.txt    # Pinned runtime dependencies
+├── requirements-dev.txt # Optional dev tools
 └── README.md
 ```
+
+See the README for the full tree.
 
 ---
 

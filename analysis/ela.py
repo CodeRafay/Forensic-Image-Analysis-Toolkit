@@ -1,303 +1,186 @@
-from PIL import Image, ImageChops, ImageEnhance, ImageFilter
-import numpy as np
+"""
+Error Level Analysis (ELA).
+
+N. Krawetz, "A Picture's Worth: Digital Image Analysis and Forensics",
+Black Hat 2007. The image is re-saved once as JPEG at a chosen quality and
+the per-pixel absolute difference to the stored pixels is measured. Regions
+whose last compression history differs from the rest (e.g. a patch pasted
+from a less compressed source) change more on resave than regions that have
+already converged at that quality.
+
+One definition is used everywhere: error = max over RGB channels of
+|original - recompressed|, averaged over a WIN x WIN window. Raw error grows
+with local detail (edges and texture always change more on resave), so it is
+content-normalised: windows are binned by their local high-pass energy (mean
+|Laplacian| of luma over the same window) and each window's error is divided
+by the median error of its texture bin. A ratio of 1 means "as much error as
+other parts of this image with the same amount of detail". Every metric, the
+mask and the overlay come from that ratio (never from a display copy).
+"""
 import io
 
-# ============================================================
-# ------------------------ ELA CORE ---------------------------
-# ============================================================
+import numpy as np
+from PIL import Image
+from scipy import ndimage
+
+from analysis.util import (error_result, image_format, load_array,
+                           make_result, overlay_mask, to_uint8)
+
+WIN = 16          # smoothing window (px): ~2x2 JPEG blocks
+ERR_FLOOR = 1.0   # grey levels; bin medians below this are treated as 1.0
+N_BINS = 16       # texture-energy quantile bins
+# A connected region whose content-normalised error exceeds K_RATIO and covers
+# >= MIN_REGION_PCT of the image is reported (notice). Calibrated at q=90 on
+# 8 photos through a camera-like pipeline (RGGB mosaic, shot+read noise,
+# demosaic, sharpening; PNG/JPEG q70-95) plus the reviewer's 48 skimage files
+# (old 4x-median rule: 9/48 false alarms; now 0/48). Hold-out (7 other photos,
+# other seeds), 84 negatives: 0 flagged (0 %); same-quality resave (q88/q90,
+# 60 files) 1/60. Positives: raw camera patch
+# (1/16-1/4 area, other photo) pasted into a q70-90 JPEG, saved PNG/q92/q95:
+# 32/63 (51 %; PNG 14/21, q95 13/21, q92 5/21). Mixed-history splices (host
+# and donor JPEG history random, final PNG/q75/85/92): 6/56 (11 %); ELA is
+# blind when the host was never JPEG-compressed or the final save is q<=85.
+K_RATIO = 2.0
+MIN_REGION_PCT = 1.0
+
+LIMITATIONS = [
+    "Error is compared only between windows with similar local detail; a "
+    "region whose detail differs in kind (text, sharp graphics, a sky "
+    "gradient next to foliage) can still stand out on an untouched image.",
+    "Resaving the whole image (or saving the splice at a low quality) "
+    "equalises error levels and hides pasted regions.",
+    "A pasted region that shares the background's compression history "
+    "(same source quality, grid-aligned) produces no ELA contrast.",
+    "Smooth or dark regions have near-zero error regardless of history, so "
+    "absence of high-error regions is not evidence of an unedited image.",
+    "On PNG or other lossless files ELA shows how the image reacts to its "
+    "first JPEG compression, not a compression history.",
+]
 
 
-def perform_ela(image_path, quality=95, error_scale=10, overlay_opacity=0.5, _img=None):
+def ela_error(rgb, quality):
+    """Raw per-pixel ELA error: max_c |rgb - JPEG_q(rgb)|, uint8 array HxW."""
+    u8 = np.asarray(rgb, np.uint8)
+    buf = io.BytesIO()
+    Image.fromarray(u8).save(buf, "JPEG", quality=int(quality))
+    with Image.open(io.BytesIO(buf.getvalue())) as im:
+        rec = np.asarray(im.convert("RGB"))
+    # int16 difference, uint8 channel max: ~10x less memory than float64
+    return np.abs(u8.astype(np.int16) - rec).max(axis=2).astype(np.uint8)
+
+
+def ela_ratio(err, gray):
+    """Content-normalised error: WIN-smoothed error divided by the median
+    smoothed error of windows with the same local high-pass energy (one of
+    N_BINS quantile bins of WIN-smoothed |Laplacian| of luma).
+    Returns (smoothed error, ratio, median smoothed error)."""
+    sm = ndimage.uniform_filter(err.astype(np.float32), WIN, mode="reflect")
+    tex = ndimage.uniform_filter(np.abs(ndimage.laplace(gray)), WIN, mode="reflect")
+    # ponytail: bin edges/medians from a 4-px subsample, plenty for 16 bins
+    ts, ss = tex[::4, ::4].ravel(), sm[::4, ::4].ravel()
+    edges = np.unique(np.quantile(ts, np.linspace(0, 1, N_BINS + 1)[1:-1]))
+    idx = np.searchsorted(edges, ts)
+    med = np.array([np.median(ss[idx == i]) if (idx == i).any() else 0.0
+                    for i in range(edges.size + 1)], np.float32)
+    expect = np.maximum(med, ERR_FLOOR)[np.searchsorted(edges, tex)]
+    return sm, sm / expect, float(np.median(ss))
+
+
+def _display(arr, max_side=1200):
+    a = np.asarray(arr, np.uint8)
+    h, w = a.shape[:2]
+    s = max(h, w) / max_side
+    if s <= 1:
+        return a
+    return np.asarray(Image.fromarray(a).resize(
+        (max(1, round(w / s)), max(1, round(h / s))), Image.Resampling.BOX))
+
+
+def _load_u8(image_path):
+    """uint8 RGB straight from the decoder (16-bit via load_array)."""
+    with Image.open(image_path) as im:
+        if im.mode in ("I;16", "I;16B", "I;16L", "I"):
+            return load_array(image_path, "RGB")[0].astype(np.uint8)
+        return np.asarray(im.convert("RGB"))
+
+
+def analyze_ela(image_path, quality=90):
     """
-    Perform Error Level Analysis (ELA) using in-memory operations.
+    ELA at one resave quality, content-normalised.
 
-    Key fix: Only compress ONCE at target quality, then compare with original.
-
-    Args:
-        _img: Optional pre-loaded PIL.Image to avoid re-opening from disk.
-
-    Returns:
-        ela_img (PIL.Image)        -> ELA image (grayscale)
-        ela_overlay (PIL.Image)    -> ELA blended with original (opacity)
-        metrics (dict)
+    Returns the util result contract with images
+    {ELA error, high-ratio overlay}, metrics (mean / 95th-percentile error,
+    median error, % area above K x expected error, max ratio) and
+    details (raw values for tests).
     """
     try:
-        # Re-use provided image or load from disk
-        original = _img.copy() if _img is not None else Image.open(image_path).convert("RGB")
-        if original.mode != "RGB":
-            original = original.convert("RGB")
+        rgb = _load_u8(image_path)
+        h, w = rgb.shape[:2]
+        if min(h, w) < 2 * WIN or rgb[::4, ::4].std() < 1.0:
+            return make_result(
+                "insufficient_data",
+                f"Image is {w}x{h} px or has no texture; ELA needs at least "
+                f"{2 * WIN}x{2 * WIN} px of varying content.",
+                limitations=LIMITATIONS)
 
-        # Compress ONCE at target quality
-        buffer = io.BytesIO()
-        original.save(buffer, "JPEG", quality=quality)
-        buffer.seek(0)
-        compressed = Image.open(buffer).convert("RGB")
+        err = ela_error(rgb, quality)
+        gray = np.asarray(Image.fromarray(rgb).convert("L"), np.float32)
+        sm, ratio, med = ela_ratio(err, gray)
+        del gray, sm
+        mask = ratio > K_RATIO
+        lab, n = ndimage.label(mask)
+        sizes = np.bincount(lab.ravel())[1:] if n else np.zeros(0)
+        big = np.flatnonzero(sizes >= MIN_REGION_PCT / 100 * h * w)
+        area_pct = float(mask.mean() * 100)
+        region_pct = float(sizes[big].sum() / (h * w) * 100) if big.size else 0.0
+        del lab
+        max_ratio = float(ratio.max())
+        p95 = float(np.percentile(err[::2, ::2], 95))
 
-        # Calculate difference between original and compressed
-        diff = ImageChops.difference(original, compressed)
-        compressed.close()
-
-        # Enhance the difference with error scale
-        extrema = diff.getextrema()
-        max_diff = max([ex[1] for ex in extrema])
-
-        if max_diff == 0:
-            max_diff = 1  # Avoid division by zero
-
-        scale = 255.0 / max_diff * (error_scale / 10.0)
-
-        # Apply scaling
-        ela_img = ImageEnhance.Brightness(diff).enhance(scale)
-
-        # Create overlay on original
-        ela_overlay = Image.blend(
-            original, ela_img.convert("RGB"), alpha=overlay_opacity)
-
-        # Compute metrics — use np.asarray (no copy) then release
-        diff_np = np.asarray(diff, dtype=np.float32)
-        max_val = float(diff_np.max())
+        q, k = int(quality), K_RATIO
         metrics = {
-            "max_diff": max_val,
-            "mean_diff": float(diff_np.mean()),
-            "std_diff": float(diff_np.std()),
-            "anomaly_score": float(diff_np.mean() + 2 * diff_np.std())
+            f"Mean error at q{q} (grey levels)": round(float(err.mean()), 2),
+            f"95th pct error at q{q} (grey levels)": round(p95, 2),
+            "Median smoothed error (grey levels)": round(med, 2),
+            f"Area above {k:g}x expected error (%)": round(area_pct, 2),
+            "Max error / expected for its texture": round(max_ratio, 2),
         }
-        del diff_np, diff
+        findings = []
+        fmt = image_format(image_path)
+        if fmt != "JPEG":
+            findings.append(("info", f"File is {fmt}, not JPEG: the error map "
+                             "shows the first JPEG compression, not a history."))
+        if big.size:
+            findings.append((
+                "notice",
+                f"{big.size} region(s) covering {region_pct:.1f}% of the image "
+                f"change more than {k:g}x as much on resave as other parts of "
+                f"the image with the same amount of detail (max {max_ratio:.1f}x). "
+                "Consistent with a different compression history; check the "
+                "region visually before concluding."))
+        else:
+            findings.append((
+                "info",
+                f"Tested for regions with error above {k:g}x the error expected "
+                f"for their texture covering >= {MIN_REGION_PCT:g}% of the "
+                f"image at q{q}: no inconsistency found at this sensitivity."))
 
-        if _img is not None:
-            del original  # we made a copy; free it
-
-        return ela_img, ela_overlay, metrics
-
-    except Exception as e:
-        print(f"[ELA ERROR] {e}")
-        return None, None, None
-
-
-def ela_multi_quality(image_path, qualities=[75, 85, 95], error_scale=10, overlay_opacity=0.5, _img=None):
-    """Run ELA at multiple JPEG compression levels."""
-    # Load once and pass to each call
-    img = _img if _img is not None else Image.open(image_path).convert("RGB")
-    results = {}
-    for q in qualities:
-        ela_img, overlay_img, metrics = perform_ela(
-            image_path, quality=q, error_scale=error_scale,
-            overlay_opacity=overlay_opacity, _img=img
-        )
-        if ela_img is not None:
-            results[q] = {
-                "ela": ela_img,
-                "overlay": overlay_img,
-                "metrics": metrics
-            }
-    if _img is None:
-        img.close()
-    return results
-
-
-# ============================================================
-# --------------------- BLOCK-BASED ELA -----------------------
-# ============================================================
-
-def block_ela_stats(ela_img, block=8):
-    """Compute block-level anomaly stats (JPEG DCT-grid aligned)."""
-    ela = np.asarray(ela_img.convert("L"), dtype=np.float32)
-    h, w = ela.shape
-
-    blocks = []
-    for y in range(0, h, block):
-        for x in range(0, w, block):
-            region = ela[y:y+block, x:x+block]
-            blocks.append(region.std())
-
-    blocks = np.array(blocks)
-
-    return {
-        "block_std_mean": float(blocks.mean()),
-        "block_std_std": float(blocks.std()),
-        "block_std_max": float(blocks.max())
-    }
-
-# ============================================================
-# ------------------------ NOISE MAP --------------------------
-# ============================================================
-
-
-def noise_map(image_path, _gray_img=None):
-    """Extract a normalized edge/noise map."""
-    try:
-        img = _gray_img if _gray_img is not None else Image.open(
-            image_path).convert("L")
-        edges = img.filter(ImageFilter.FIND_EDGES)
-
-        edges_np = np.asarray(edges, dtype=np.float32)
-        emin, emax = edges_np.min(), edges_np.max()
-        edges_np = 255 * (edges_np - emin) / (emax - emin + 1e-5)
-
-        result = Image.fromarray(edges_np.astype(np.uint8))
-        del edges_np
-        return result
-
-    except Exception as e:
-        print(f"[NOISE MAP ERROR] {e}")
-        return None
-
-# ============================================================
-# ---------------------- SHARPNESS MAP ------------------------
-# ============================================================
-
-
-def sharpness_map(image_path, _gray_img=None):
-    """Laplacian-like sharpness map."""
-    try:
-        img = _gray_img if _gray_img is not None else Image.open(
-            image_path).convert("L")
-        lap = img.filter(ImageFilter.FIND_EDGES)
-        lap_np = np.asarray(lap, dtype=np.float32)
-        lmin, lmax = lap_np.min(), lap_np.max()
-        lap_np = 255 * (lap_np - lmin) / (lmax - lmin + 1e-5)
-        result = Image.fromarray(lap_np.astype(np.uint8))
-        del lap_np
-        return result
-    except Exception as e:
-        print(f"[SHARPNESS MAP ERROR] {e}")
-        return None
-
-# ============================================================
-# ------------------------ ENTROPY MAP ------------------------
-# ============================================================
-
-
-def patch_entropy(patch):
-    """Shannon entropy for a grayscale patch."""
-    hist, _ = np.histogram(patch.flatten(), bins=256, range=(0, 255))
-    p = hist / (hist.sum() + 1e-5)
-    p = p[p > 0]
-    return -np.sum(p * np.log2(p))
-
-
-def entropy_map(image_path, patch_size=16, _gray_img=None):
-    """Compute local Shannon entropy over sliding patches."""
-    img = _gray_img if _gray_img is not None else Image.open(
-        image_path).convert("L")
-    arr = np.asarray(img, dtype=np.uint8)
-
-    h, w = arr.shape
-    ent = np.zeros((h, w), dtype=np.float32)
-
-    for y in range(0, h - patch_size, patch_size):
-        for x in range(0, w - patch_size, patch_size):
-            patch = arr[y:y+patch_size, x:x+patch_size]
-            e = patch_entropy(patch)
-            ent[y:y+patch_size, x:x+patch_size] = e
-
-    emin, emax = ent.min(), ent.max()
-    ent = 255 * (ent - emin) / (emax - emin + 1e-5)
-    result = Image.fromarray(ent.astype(np.uint8))
-    del ent, arr
-    return result
-
-# ============================================================
-# -------------------------- SSIM MAP -------------------------
-# ============================================================
-
-
-def ssim_map(original_img, compressed_img):
-    """Compute SSIM-like difference surface."""
-    A = np.asarray(original_img.convert("L"), dtype=np.float32)
-    B = np.asarray(compressed_img.convert("L"), dtype=np.float32)
-
-    C1, C2 = 6.5025, 58.5225
-    muA = A.mean()
-    muB = B.mean()
-    sigmaA = A.std()
-    sigmaB = B.std()
-    covariance = ((A - muA) * (B - muB)).mean()
-
-    ssim_val = ((2 * muA * muB + C1) * (2 * covariance + C2)) / \
-               ((muA**2 + muB**2 + C1) * (sigmaA**2 + sigmaB**2 + C2))
-
-    diff = np.abs(A - B)
-    diff = (255 * diff / (diff.max() + 1e-5)).astype(np.uint8)
-    diff_img = Image.fromarray(diff)
-
-    return diff_img, float(ssim_val)
-
-# ============================================================
-# ------------------------ THRESHOLD MASK ---------------------
-# ============================================================
-
-
-def threshold_ela(ela_img, threshold=40):
-    """Generate binary mask of high-error areas."""
-    ela_np = np.asarray(ela_img.convert("L"))
-    mask = (ela_np > threshold).astype(np.uint8) * 255
-    return Image.fromarray(mask)
-
-# ============================================================
-# ----------------------- MASTER REPORT -----------------------
-# ============================================================
-
-
-def forensic_analysis(image_path, qualities=[75, 85, 95], error_scale=10, overlay_opacity=0.5):
-    """
-    Full forensic pipeline returning all maps + metrics in one dictionary.
-    Streamlit-ready.
-
-    Memory-optimised: loads image once and passes it to sub-functions.
-    """
-    # Load once — used by all sub-functions
-    original = Image.open(image_path).convert("RGB")
-    gray = original.convert("L")
-
-    # ---------- ELA ----------
-    ela_results = ela_multi_quality(
-        image_path, qualities, error_scale=error_scale,
-        overlay_opacity=overlay_opacity, _img=original
-    )
-
-    # Use first quality in list as primary quality
-    primary_quality = qualities[0] if qualities else 90
-
-    # Primary ELA for downstream use
-    ela_primary, overlay_primary, metrics_primary = perform_ela(
-        image_path, quality=primary_quality, error_scale=error_scale,
-        overlay_opacity=overlay_opacity, _img=original
-    )
-
-    # Block-based statistics
-    block_stats = block_ela_stats(ela_primary)
-
-    # Noise / Sharpness / Entropy — pass pre-loaded grayscale image
-    noise = noise_map(image_path, _gray_img=gray)
-    sharp = sharpness_map(image_path, _gray_img=gray)
-    entropy = entropy_map(image_path, _gray_img=gray)
-
-    # SSIM — reuse the already-open original
-    buffer = io.BytesIO()
-    original.save(buffer, "JPEG", quality=primary_quality)
-    buffer.seek(0)
-    compressed_primary = Image.open(buffer)
-    ssim_img, ssim_score = ssim_map(original, compressed_primary)
-    compressed_primary.close()
-
-    # Free the source images — they've been fully consumed
-    original.close()
-    gray.close()
-
-    # Combined Report - using consistent key names
-    report = {
-        "ela_multi_quality": ela_results,
-        "ela_90": ela_primary,  # Keep "ela_90" key for backward compatibility
-        "ela_90_overlay": overlay_primary,
-        "ela_90_metrics": metrics_primary,
-        "block_stats": block_stats,
-        "noise_map": noise,
-        "sharpness_map": sharp,
-        "entropy_map": entropy,
-        "ssim_img": ssim_img,
-        "ssim_score": ssim_score,
-        "threshold_mask": threshold_ela(ela_primary, 40)
-    }
-
-    return report
+        images = {
+            f"ELA error at q{q} (contrast-stretched for display)":
+                to_uint8(_display(err)),
+            f"Regions above {k:g}x expected error (red)":
+                overlay_mask(_display(rgb), _display(mask.astype(np.uint8) * 255) / 255.0),
+        }
+        return make_result(
+            "ok",
+            f"Re-saved at JPEG q{q} and measured the per-pixel change "
+            f"(median {med:.2f}, 95th pct {p95:.1f} grey levels), normalised "
+            "by local detail.",
+            findings, metrics, images, limitations=LIMITATIONS,
+            details={"quality": q, "median_error": med,
+                     "mean_error": float(err.mean()),
+                     "area_above_k_pct": area_pct,
+                     "region_pct": region_pct, "n_regions": int(big.size),
+                     "max_ratio": max_ratio, "k": K_RATIO})
+    except Exception as e:  # noqa: BLE001
+        return error_result(e, LIMITATIONS)

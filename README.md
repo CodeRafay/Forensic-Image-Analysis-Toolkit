@@ -1,321 +1,229 @@
 # 🔍 Veritas - Forensic Image Analysis Toolkit
 
-[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
-[![Streamlit](https://img.shields.io/badge/streamlit-1.28+-red.svg)](https://streamlit.io)
+[![Python 3.10](https://img.shields.io/badge/python-3.10-blue.svg)](https://www.python.org/downloads/)
+[![Streamlit](https://img.shields.io/badge/streamlit-1.64-red.svg)](https://streamlit.io)
 
-**Veritas** is a comprehensive web-based digital forensics tool for detecting image forgeries and manipulations using 13 advanced analysis techniques.
+**Veritas** is a Streamlit web app that runs published image-forensics
+techniques on a JPEG or PNG and reports what each one measured: headline
+numbers, findings, maps and each test's stated limitations.
 
-## 🎯 Features
+> ### ⚠️ Indicators, not proof
+>
+> Every result is an **indicator, not proof**. Each test detects one kind of
+> trace under stated conditions; a clean result means only that *this* test
+> found no inconsistency at its sensitivity. Veritas produces **no
+> authenticity score and no overall verdict**: no combination of these tests
+> can certify that an image is unedited. Its output is not evidence of
+> authenticity and the hash ledger is not a legal chain of custody. Combine
+> several independent tests with the image's context before drawing
+> conclusions.
 
-### Core Analysis Techniques
+> ### Classical methods only
+>
+> Veritas deliberately uses classical (non-learned) methods so it runs on
+> CPU within Streamlit Community Cloud's memory limits and ships under a
+> permissive licence. Trained networks such as TruFor / Noiseprint++
+> (Guillaro et al., CVPR 2023), CAT-Net (Kwon et al., IJCV 2022) and
+> CLIP-based synthetic-image detectors (Cozzolino et al., CVPR-W 2024)
+> currently outperform these methods, especially after recompression and
+> for AI-generated images. They need GPUs or several GB of RAM and their
+> weights are mostly licensed for research use only. For high-stakes
+> casework, use them alongside — or instead of — this tool.
 
-1. **Error Level Analysis (ELA)** - Multi-quality compression artifact detection
-2. **Metadata Forensics** - EXIF analysis, GPS extraction, thumbnail inconsistencies
-3. **Histogram Analysis** - Statistical color distribution patterns
-4. **Noise Inconsistency** - High-pass filtering for tampered regions
-5. **JPEG Ghost Detection** - Multi-level compression artifacts
-6. **Quantization Table Analysis** - JPEG compression table forensics
-7. **Copy-Move Forgery Detection (CMFD)** - Duplicated region detection
-8. **PRNU Analysis** - Photo Response Non-Uniformity (sensor fingerprints)
-9. **Frequency Domain Analysis** - FFT/DCT-based tampering detection
-10. **Deepfake Detection** - GAN artifact classification
-11. **Resampling Detection** - Image resizing and interpolation artifacts
-12. **Steganography Detection** - LSB statistical analysis for hidden data detection
-13. **Hash Verification** - Cryptographic provenance tracking and authentication
+## 🎯 Techniques
 
-### Information Security Features
+The app has 13 tabs. Each technique implements a published method; its
+guide in [`Descriptions/`](Descriptions/) (also shown in the app under "How
+this technique works") gives the method, the measured benchmark numbers and
+the limitations.
 
-- **🔐 LSB Steganography Detection** - Chi-square testing for hidden data in Least Significant Bits
-- **🔑 Blockchain-Based Provenance** - Cryptographic and perceptual hash verification
-- **⚖️ Legal Chain of Custody** - Track image modifications with timestamps
-- **🔒 SHA-256 Integrity** - Exact file matching for evidence verification
-- **👁️ Perceptual Hashing** - Detect similar images despite minor modifications
+| Tab | Technique | Published method | Guide |
+| --- | --------- | ---------------- | ----- |
+| ELA | Error Level Analysis | Krawetz 2007; error normalised by local texture energy | [ELA.md](Descriptions/ELA.md) |
+| Metadata | EXIF / XMP / PNG text consistency, C2PA Content Credentials | CIPA Exif 2.32, Adobe XMP, C2PA 2.x (`c2pa-python`); Kee, Johnson & Farid 2011 | [Metadata.md](Descriptions/Metadata.md) |
+| Histogram | Contrast-enhancement fingerprint | Stamm & Liu 2010 (histogram-DFT HF energy) | [Histogram.md](Descriptions/Histogram.md) |
+| Noise | Noise-residual consistency | Splicebuster (Cozzolino, Poggi & Verdoliva 2015): residual co-occurrence features + EM | [Noise_Ghost.md](Descriptions/Noise_Ghost.md) |
+| JPEG | Quantization tables | IJG quality estimate and standard-table test (Farid 2006, Kornblum 2008) | [Quantization.md](Descriptions/Quantization.md) |
+| JPEG | Double-JPEG localization | Bianchi & Piva 2012 (aligned and non-aligned) | [Quantization.md](Descriptions/Quantization.md) |
+| JPEG | JPEG ghosts | Farid 2009, including recompression at an off-grid offset | [Noise_Ghost.md](Descriptions/Noise_Ghost.md) |
+| Copy-Move | Copy-move forgery detection | flip-aware SIFT/g2NN + RANSAC affine (Amerini et al. 2011) and dense Zernike/PatchMatch (Cozzolino, Poggi & Verdoliva 2015), ZNCC verification | [CMFD.md](Descriptions/CMFD.md) |
+| PRNU | Sensor fingerprint | Lukáš/Fridrich/Goljan 2006, Goljan et al. 2009 (PCE > 60), Chierchia et al. 2014 (correlation predictor + MRF splice localisation) | [PRNU.md](Descriptions/PRNU.md) |
+| Frequency | Power spectrum | Radial 1/f² slope and HF share (Field 1987; Torralba & Oliva 2003) | [Frequency.md](Descriptions/Frequency.md) |
+| Frequency | JPEG block grid | Block artifact grid (Li, Yuan & Yu 2009): grid origin and misaligned regions | [Frequency.md](Descriptions/Frequency.md) |
+| Resampling | Rescaling / rotation | Kirchner 2008 p-map spectrum with JPEG/Nyquist notching (Kirchner & Gloe 2009) fused with a derivative-projection detector (Gallagher 2005; Mahdian & Saic 2008), windowed localisation, NN duplication test | [Resampling.md](Descriptions/Resampling.md) |
+| Synthetic traces | **Experimental**: periodic noise-residual peaks | Corvi et al. 2023; Durall et al. 2020. Measurements only, **no AI-image verdict** | [Deepfake.md](Descriptions/Deepfake.md) |
+| Steganography | LSB-replacement payload | Weighted Stego (Ker & Böhme 2008), SPA (Dumitrescu 2003), RS (Fridrich 2001), PoV chi² (Westfeld & Pfitzmann 1999) | [Steganography.md](Descriptions/Steganography.md) |
+| Hash ledger | File / pixel identity and visual similarity | SHA-256, pixel SHA-256, pHash/dHash/aHash; hash-chained per-session ledger, HMAC-signed export | [Hash_Verification.md](Descriptions/Hash_Verification.md) |
+| About | What the app does and does not claim | | |
 
-### Additional Features
+The synthetic-traces tab cannot tell whether an image is AI-generated:
+modern diffusion models, resizing and recompression remove the traces it
+measures, and their absence says nothing.
 
-- **Technique Descriptions** - Built-in educational guides for each analysis method
-- **Default Sample Image** - Preloaded image for instant testing without upload
-- **Web-based Interface** - No installation required, runs in browser
-- **Dark Theme** - Professional forensic UI with neon accents
-- **14 Analysis Tabs** - Organized, intuitive workflow
-- **Human-Readable Results** - Authenticity scoring (0-100) and risk levels
-- **Real-time Processing** - Instant visual feedback
-- **Cloud Deployment Ready** - Deploy to Streamlit Cloud in minutes
+## How the app treats images
+
+- **Original bytes only.** Every technique reads the uploaded file as stored.
+  Nothing is downscaled and re-saved before analysis (re-encoding destroys
+  compression, noise, resampling and LSB traces).
+- **Copy-move** runs on an in-memory downscale to 2048 px on the long side for
+  very large images and reports the analysed size. **PRNU** analyses up to 4096 px per
+  side, centre-cropping larger images (never resizing); references are
+  cropped identically.
+- **Per-session storage.** Uploads go to a temporary directory private to the
+  browser session, under random file names, so two visitors never see each
+  other's files. The hash ledger also lives only in the session; export it to
+  keep it.
+- **One result format.** Every analysis returns the same result dictionary
+  (status, summary, findings, metrics, images, tables, limitations), rendered
+  by one function in `app.py`. See [docs/API.md](docs/API.md).
+
+## Bundled sample image
+
+`assets/sample images/sampleImg.jpeg` is loaded when nothing is uploaded. It
+is a **known fabricated example**, not a clean reference: its C2PA manifest
+declares `compositeWithTrainedAlgorithmicMedia`, the clouds are copy-moved,
+and its EXIF thumbnail no longer matches the image. That makes it a good demo
+(Metadata, Copy-Move and several JPEG tabs report findings), but do not use
+it to judge what a clean photo looks like.
+
+## Example gallery
+
+`assets/examples/` holds nine images, each with one known edit or property
+that a technique detects: a recompressed patch (ELA), a JPEG ghost, a cloned
+block (Copy-Move), a 1.5x upscale (Resampling), a contrast stretch
+(Histogram), an LSB payload (Steganography), contradictory EXIF (Metadata),
+a smoothed region (Noise) and a camera match (PRNU). Pick one in the
+sidebar's "Or try an example" box; the app says what was done and which tab
+detects it, and the PRNU example loads its reference photos itself.
+
+The first seven are edits of the bundled sample. Noise and PRNU need real
+full-resolution camera noise, so they use four CC0 iPhone 5c photos from
+Wikimedia Commons (credits in `assets/examples/source/CREDITS.md`).
+`python scripts/make_examples.py` rebuilds everything and exits non-zero if a
+technique stops catching its example.
 
 ## 📋 Requirements
 
-- Python 3.9 or higher
-- 2GB RAM minimum
-- Modern web browser (Chrome, Firefox, Edge)
+- Python 3.10 (pinned in `.python-version`; `requirements.txt` pins the
+  versions the tests were run against)
+- A modern browser
 
-## 🚀 Quick Start
-
-### 1. Clone the Repository
+## 🚀 Quick start
 
 ```bash
 git clone https://github.com/CodeRafay/Forensic-Image-Analysis-Toolkit.git
 cd Forensic-Image-Analysis-Toolkit
-```
 
-### 2. Create Virtual Environment
-
-```bash
+python -m venv .venv
 # Windows
-python -m venv venv
-venv\Scripts\activate
-
+.venv\Scripts\activate
 # macOS/Linux
-python3 -m venv venv
-source venv/bin/activate
-```
+source .venv/bin/activate
 
-### 3. Install Dependencies
-
-```bash
 pip install -r requirements.txt
-```
-
-### 4. Run the Application
-
-```bash
 streamlit run app.py
 ```
 
-The application will automatically open in your default browser at `http://localhost:8501`
+The app opens at `http://localhost:8501`.
 
-## 📁 Project Structure
+### Tests
 
-```
-VeritasForensics/
-├── app.py                          # Main Streamlit application
-├── requirements.txt                # Python dependencies
-├── requirements-dev.txt            # Development dependencies
-├── projectSetup.md                 # Detailed setup guide
-├── README.md                       # This file
-├── CHANGELOG.md                    # Version history
-├── CONTRIBUTING.md                 # Contribution guidelines
-├── LICENSE                         # BSD 3-Clause License
-├── pytest.ini                      # Test configuration
-├── .gitignore                      # Git ignore rules
-├── .pre-commit-config.yaml         # Pre-commit hooks
-├── TECHNIQUE_DESCRIPTIONS_USER_GUIDE.md  # User guide for descriptions
-│
-├── analysis/                       # Forensic analysis modules
-│   ├── __init__.py
-│   ├── ela.py                      # Error Level Analysis
-│   ├── metadata_analysis.py        # EXIF + file forensics
-│   ├── histogram_analysis.py       # Statistical analysis
-│   ├── noise_map.py                # Noise inconsistency
-│   ├── jpeg_ghost.py               # Compression artifacts
-│   ├── quant_table.py              # JPEG quantization
-│   ├── cmfd.py                     # Copy-move detection
-│   ├── prnu.py                     # Sensor fingerprint
-│   ├── frequency_analysis.py       # FFT/DCT analysis
-│   ├── deepfake_detector.py        # GAN detection
-│   ├── resampling_detector.py      # Resampling detection
-│   ├── steganography_detection.py  # LSB steganography detection
-│   ├── hash_verification.py        # Cryptographic provenance
-│   └── util.py                     # Helper functions
-│
-├── Descriptions/                   # Technique education module (NEW)
-│   ├── ELA.md                      # ELA guide
-│   ├── Metadata.md                 # Metadata guide
-│   ├── Steganography.md            # Steganography detection guide
-│   ├── Hash_Verification.md        # Hash verification guide
-│   ├── Histogram.md                # Histogram guide
-│   ├── Noise_Ghost.md              # Noise/Ghost guide
-│   ├── Quantization.md             # Quantization guide
-│   ├── CMFD.md                     # CMFD guide
-│   ├── PRNU.md                     # PRNU guide
-│   ├── Frequency.md                # FFT/DCT guide
-│   ├── Deepfake.md                 # Deepfake guide
-│   └── Resampling.md               # Resampling guide
-│
-├── docs/                           # Documentation
-│   ├── API.md                      # API documentation
-│   ├── DEPLOYMENT.md               # Deployment guide
-│   ├── PROJECT_SUMMARY.md          # Project overview
-│   └── TECHNIQUES.md               # Techniques reference
-│
-├── tests/                          # Unit tests
-│   ├── __init__.py
-│   ├── test_ela.py                 # ELA tests
-│   ├── test_metadata.py            # Metadata tests
-│   └── test_integration.py         # Integration tests
-│
-├── assets/                         # Static files
-│   ├── style.css                   # Custom CSS
-│   └── sample images/              # Sample test images
-│       └── sampleImg.jpeg          # Default sample image
-│
-├── .streamlit/                     # Streamlit config
-│   └── config.toml                 # Theme & server settings
-│
-└── temp/                           # Temporary processing files
-    └── .gitkeep
+The suite uses the standard-library `unittest` runner and needs nothing beyond
+`requirements.txt`:
+
+```bash
+python -m unittest discover -s tests -t .
 ```
 
-## 🔬 Usage Guide
+142 tests: one `tests/test_<module>.py` per analysis module (seeded synthetic
+benchmarks that pin detection and false-alarm rates) plus
+`tests/test_contract.py`, which runs every entry point on JPEG, PNG,
+grayscale, RGBA, palette, 16×16, 1×1 and flat images and checks the result
+contract. A full run takes a few minutes.
 
-### Basic Workflow
+## 📁 Project structure
 
-1. **View Sample Image**: App loads with default sample image automatically
-2. **Upload Your Image** (Optional): Click "Choose an Image" in sidebar to analyze your own
-3. **Learn About Techniques**: Click technique description buttons in sidebar for guidance
-4. **Select Analysis Tab**: Navigate to the technique you want to use
-5. **Configure Parameters**: Adjust sliders/options as needed
-6. **Run Analysis**: Click the analysis button
-7. **Review Results**: View visualizations, authenticity scores, and interpretations
-
-### Technique Descriptions (NEW)
-
-Access built-in educational guides via sidebar buttons:
-
-- **📚 Technique Descriptions Section** - Click any technique to learn
-- **Non-technical explanations** - Understand what each tool does
-- **Interpretation guides** - Learn to read results (normal vs. suspicious)
-- **Real-world examples** - See practical use cases
-- **Limitations explained** - Understand reliability and caveats
-
-### Analysis Techniques Explained
-
-#### Error Level Analysis (ELA)
-
-Detects compression artifacts by comparing the original image with a recompressed version. Manipulated regions show different error levels.
-
-**Use Case**: Quick initial screening for tampering
-
-#### Metadata Forensics
-
-Examines EXIF data, timestamps, GPS coordinates, and software signatures for inconsistencies.
-
-**Use Case**: Verify image authenticity and origin
-
-#### Histogram Analysis
-
-Analyzes color distribution patterns. Manipulated regions often show statistical anomalies.
-
-**Use Case**: Detect color/brightness adjustments
-
-#### Noise Inconsistency
-
-Uses high-pass filtering to detect regions with different noise characteristics.
-
-**Use Case**: Identify spliced or cloned regions
-
-#### JPEG Ghost Detection
-
-Performs multiple recompressions to detect prior editing cycles.
-
-**Use Case**: Determine editing history
-
-#### Copy-Move Forgery Detection (CMFD)
-
-Identifies duplicated regions within the same image.
-
-**Use Case**: Detect cloning tools usage
-
-#### PRNU Analysis
-
-Extracts sensor-specific noise patterns unique to each camera.
-
-**Use Case**: Verify camera source consistency
-
-#### Frequency Domain Analysis
-
-Analyzes FFT/DCT coefficients for manipulation artifacts.
-
-**Use Case**: Detect advanced editing techniques
-
-#### Deepfake Detection
-
-Identifies GAN-generated or AI-manipulated faces.
-
-**Use Case**: Detect synthetic or deepfake images
-
-#### Resampling Detection
-
-Identifies traces of image resizing or interpolation.
-
-**Use Case**: Detect resolution manipulation
-
-## ⚙️ Configuration
-
-### Theme Customization
-
-Edit `.streamlit/config.toml`:
-
-```toml
-[theme]
-base="dark"
-primaryColor="#00ff41"  # Neon green accent
-backgroundColor="#0e1117"
-secondaryBackgroundColor="#262730"
-textColor="#fafafa"
+```
+Forensic-Image-Analysis-Toolkit/
+├── app.py                          # Streamlit app: 13 tabs, one shared renderer
+├── requirements.txt                # Pinned runtime dependencies
+├── requirements-dev.txt            # Optional linters/tools (not needed for tests)
+├── .python-version                 # 3.10 (Streamlit Cloud / pyenv)
+├── README.md  CHANGELOG.md  CONTRIBUTING.md  LICENSE
+├── projectSetup.md                 # Setup notes
+├── TECHNIQUE_DESCRIPTIONS_USER_GUIDE.md
+├── pytest.ini                      # Optional; pytest is not required
+├── .pre-commit-config.yaml
+├── .streamlit/config.toml          # Theme, headless server, showErrorDetails="type"
+│
+├── analysis/
+│   ├── __init__.py                 # Lazy sub-module imports
+│   ├── util.py                     # Result contract, decoding, JPEG grid (BAG) helpers
+│   ├── ela.py                      # analyze_ela
+│   ├── metadata_analysis.py        # analyze_metadata, read_c2pa
+│   ├── histogram_analysis.py       # analyze_histogram
+│   ├── noise_map.py                # analyze_noise
+│   ├── quant_table.py              # analyze_quantization_table
+│   ├── double_jpeg.py              # analyze_double_jpeg
+│   ├── jpeg_ghost.py               # analyze_jpeg_ghost
+│   ├── cmfd.py                     # detect_copy_move
+│   ├── prnu.py                     # analyze_prnu
+│   ├── frequency_analysis.py       # analyze_spectrum, analyze_blocking
+│   ├── resampling_detector.py      # detect_resampling
+│   ├── deepfake_detector.py        # analyze_synthetic_traces (Experimental)
+│   ├── steganography_detection.py  # analyze_lsb
+│   └── hash_verification.py        # hashes + per-session ledger
+│
+├── Descriptions/                   # In-app technique guides (one per tab)
+│   ├── ELA.md  Metadata.md  Histogram.md  Noise_Ghost.md  Quantization.md
+│   ├── CMFD.md  PRNU.md  Frequency.md  Resampling.md  Deepfake.md
+│   └── Steganography.md  Hash_Verification.md
+│
+├── docs/
+│   ├── API.md                      # Result contract and every entry point
+│   ├── DEPLOYMENT.md
+│   ├── Documentation.md            # Project report with UML diagrams
+│   ├── PROJECT_SUMMARY.md
+│   └── TECHNIQUES.md
+│
+├── tests/                          # 142 tests
+│   ├── test_contract.py            # Every entry point x every input format
+│   ├── test_ela.py  test_metadata.py  test_histogram_analysis.py
+│   ├── test_noise_map.py  test_quant_table.py  test_double_jpeg.py
+│   ├── test_jpeg_ghost.py  test_cmfd.py  test_prnu.py
+│   ├── test_frequency_analysis.py  test_resampling_detector.py
+│   ├── test_deepfake_detector.py  test_steganography_detection.py
+│   └── test_hash_verification.py
+│
+└── assets/
+    ├── style.css
+    ├── sample images/sampleImg.jpeg  # Fabricated demo image (see above)
+    └── examples/                     # One known edit per technique (see above)
 ```
 
 ## 🌐 Deployment
 
-### Deploy to Streamlit Cloud
+Streamlit Community Cloud:
 
-1. Push code to GitHub
-2. Go to [share.streamlit.io](https://share.streamlit.io)
-3. Connect your GitHub repository
-4. Select `app.py` as the main file
-5. Click "Deploy"
+1. Push to GitHub, create a new app at [share.streamlit.io](https://share.streamlit.io), main file `app.py`.
+2. Python 3.10 is selected from `.python-version`; dependencies install from the pinned `requirements.txt` (no system packages needed: `opencv-python-headless` and `c2pa-python` ship wheels).
+3. Optional: add `LEDGER_KEY = "<random secret>"` under App settings → Secrets. Ledger exports are then signed with HMAC-SHA256 and imports verify the signature; without it exports carry a plain SHA-256 digest that only detects accidental change.
 
-## 📊 Performance
-
-- **ELA**: ~2-5 seconds per image
-- **Metadata**: <1 second
-- **Histogram**: ~1-2 seconds
-- **CMFD**: ~10-30 seconds (depending on image size)
-- **Deepfake**: ~5-10 seconds
-- **PRNU**: ~15-30 seconds
-
-_Benchmarked on Intel i5, 8GB RAM, 1920x1080 images_
+The ledger is per session: it is not shared between visitors and is lost when
+the session ends unless exported. Docker and other hosts: see
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+See [CONTRIBUTING.md](CONTRIBUTING.md). New techniques must return the result
+contract, be added to `tests/test_contract.py`, and have their thresholds
+calibrated on a seeded benchmark.
 
 ## 📝 License
 
-This project is licensed under the BSD 3-Clause License - see the [LICENSE](LICENSE) file for details.
-
-## Acknowledgments
-
-- **Streamlit** - For the excellent web framework
-- **PIL/Pillow** - Image processing library
-- **OpenCV** - Computer vision algorithms
-- **SciPy** - Scientific computing tools
-
-## 📚 References
-
-1. Farid, H. (2009). "Image Forgery Detection"
-2. Fridrich, J. (2009). "Digital Image Forensics"
-3. Bayar, B. & Stamm, M. (2018). "Constrained Convolutional Neural Networks"
+BSD 3-Clause, see [LICENSE](LICENSE).
 
 ## 📧 Contact
 
-- **Author**: CodeRafay
-- **GitHub**: [@CodeRafay](https://github.com/CodeRafay)
+- **Author**: CodeRafay ([@CodeRafay](https://github.com/CodeRafay))
 - **Repository**: [Forensic-Image-Analysis-Toolkit](https://github.com/CodeRafay/Forensic-Image-Analysis-Toolkit)
-
-## 🔮 Roadmap
-
-- [ ] Batch processing for multiple images
-- [ ] PDF report generation
-- [ ] Machine learning-based forgery classifier
-- [ ] Video frame analysis
-- [ ] REST API for integration
-
----
-
-**⭐ If you find this project useful, please star it on GitHub!**

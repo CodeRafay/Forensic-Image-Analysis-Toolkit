@@ -1,283 +1,212 @@
-from analysis import steganography_detection
+"""
+Behavioural tests and a small seeded benchmark for the LSB steganalysis
+module (WS / SPA / RS payload estimators, PoV sequential test).
+"""
+import io
+import shutil
+import tempfile
 import unittest
-import os
 from pathlib import Path
-from PIL import Image
+
 import numpy as np
-import sys
+import skimage.data as skd
+from PIL import Image
 
-# Add parent directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+from analysis import steganography_detection as S
+
+SAMPLE = Path(__file__).resolve().parent.parent / "assets" / "sample images" / "sampleImg.jpeg"
 
 
-class TestSteganographyDetection(unittest.TestCase):
-    """Unit tests for Steganography Detection module"""
+def lsb_replace(a, p, rng, sequential=False):
+    x = a.astype(np.int64).ravel().copy()
+    if sequential:
+        m = np.zeros(x.size, bool)
+        m[: int(round(p * x.size))] = True
+    else:
+        m = rng.random(x.size) < p
+    x[m] = (x[m] & ~1) | rng.integers(0, 2, m.sum())
+    return x.reshape(a.shape).astype(np.uint8)
 
+
+def lsb_match(a, p, rng):
+    x = a.astype(np.int64).ravel().copy()
+    bits = rng.integers(0, 2, x.size)
+    need = (rng.random(x.size) < p) & ((x & 1) != bits)
+    step = rng.choice([-1, 1], x.size)
+    step[x == 0], step[x == 255] = 1, -1
+    x[need] += step[need]
+    return x.reshape(a.shape).astype(np.uint8)
+
+
+def decode_jpeg(a, q):
+    b = io.BytesIO()
+    Image.fromarray(a).save(b, "JPEG", quality=q)
+    return np.asarray(Image.open(io.BytesIO(b.getvalue())))
+
+
+def score(a):
+    a = np.asarray(a, np.int64)
+    cs = [a] if a.ndim == 2 else [a[..., i] for i in range(3)]
+    return max(S.channel_score(c) for c in cs)
+
+
+class TestEstimators(unittest.TestCase):
+    def test_estimators_track_true_payload(self):
+        rng = np.random.default_rng(0)
+        for name in ("astronaut", "camera", "coffee"):
+            a = getattr(skd, name)()
+            c = a[..., 1] if a.ndim == 3 else a
+            for p in (0.0, 0.25, 0.5, 1.0):
+                s = lsb_replace(c, p, rng).astype(np.int64)
+                with self.subTest(name=name, p=p):
+                    self.assertAlmostEqual(S.weighted_stego(s), p, delta=0.06)
+                    self.assertAlmostEqual(S.spa(s), p, delta=0.06)
+                    if p < 1.0:  # RS quadratic degenerates at p = 1
+                        self.assertAlmostEqual(S.rs_analysis(s), p, delta=0.06)
+
+    def test_saturated_cover_falls_back_to_spa(self):
+        """Line art / binary covers: WS has no weights (or blows up), so the
+        decision must be SPA, not min(WS, SPA) hiding the payload."""
+        rng = np.random.default_rng(3)
+        horse = skd.horse().astype(np.uint8) * 255
+        checker = skd.checkerboard()
+        for c in (horse, checker):
+            for p in (0.1, 0.25):
+                s = lsb_replace(c, p, rng)
+                t = S.WSTerms(s)
+                sc, rule = S.decision_score(t.estimate(), S.spa(s), t.valid)
+                self.assertEqual(rule, "SPA (WS unreliable)")
+                self.assertAlmostEqual(sc, p, delta=0.05)
+
+    def test_ws_terms_row_ranges_match_direct(self):
+        """Prefix WS from per-row sums equals WS on the full image."""
+        c = np.asarray(Image.open(SAMPLE).convert("L"))
+        t = S.WSTerms(c)
+        self.assertAlmostEqual(t.estimate(), t.estimate(0, None), places=9)
+        self.assertEqual(t.blocks.shape, ((c.shape[0] - 2) // 64, (c.shape[1] - 2) // 64))
+
+    def test_pov_direction(self):
+        """High p-value = pairs equalised = embedding. Clean → p ≈ 0."""
+        c = np.asarray(Image.open(SAMPLE).convert("L"))
+        s = lsb_replace(c, 1.0, np.random.default_rng(1))
+        self.assertLess(S.pov_chi_square_test(c)[1], 0.01)
+        self.assertGreater(S.pov_chi_square_test(s)[1], 0.5)
+
+    def test_old_tuple_api_removed(self):
+        self.assertFalse(hasattr(S, "detect_lsb_steganography"))
+
+
+class TestAnalyzeLsb(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        """Create test images"""
-        cls.test_dir = Path(__file__).parent / "test_images"
-        cls.test_dir.mkdir(exist_ok=True)
-
-        # Create a simple test image
-        cls.test_image = cls.test_dir / "test_stego.jpg"
-        img = Image.new('RGB', (200, 200), color=(128, 128, 128))
-        img.save(cls.test_image, 'JPEG', quality=95)
-
-        # Create an image with modified LSB (simulated steganography)
-        cls.stego_image = cls.test_dir / "test_with_stego.png"
-        img_array = np.array(img)
-        
-        # Modify LSB in a pattern (simulate hidden data)
-        # Set all LSBs to 1 in a region
-        img_array[50:150, 50:150, :] = img_array[50:150, 50:150, :] | 1
-        
-        stego_img = Image.fromarray(img_array.astype(np.uint8))
-        stego_img.save(cls.stego_image, 'PNG')
+        cls.tmp = Path(tempfile.mkdtemp())
+        cls.base = np.asarray(Image.open(SAMPLE).convert("RGB"))
+        cls.rng = np.random.default_rng(42)
 
     @classmethod
     def tearDownClass(cls):
-        """Clean up test images"""
-        if cls.test_image.exists():
-            cls.test_image.unlink()
-        if cls.stego_image.exists():
-            cls.stego_image.unlink()
-        if cls.test_dir.exists() and not any(cls.test_dir.iterdir()):
-            cls.test_dir.rmdir()
+        shutil.rmtree(cls.tmp, ignore_errors=True)
 
-    def test_detect_lsb_steganography_basic(self):
-        """Test basic steganography detection functionality"""
-        prob, visual_map, details = steganography_detection.detect_lsb_steganography(
-            str(self.test_image)
-        )
+    def run_on(self, arr, name, **kw):
+        p = self.tmp / name
+        Image.fromarray(arr).save(p, **kw)
+        return S.analyze_lsb(str(p))
 
-        # Check return types
-        self.assertIsInstance(prob, float)
-        self.assertIsNotNone(visual_map)
-        self.assertIsInstance(details, dict)
+    def levels(self, r):
+        return [f["level"] for f in r["findings"]]
 
-        # Check probability is in valid range
-        self.assertGreaterEqual(prob, 0.0)
-        self.assertLessEqual(prob, 100.0)
+    def test_clean_png_no_warning(self):
+        r = self.run_on(self.base, "clean.png")
+        self.assertEqual(r["status"], "ok")
+        self.assertNotIn("warning", self.levels(r))
+        self.assertLess(r["details"]["score"], S.THRESHOLD)
+        self.assertEqual(len(r["images"]), 2)
+        self.assertTrue(r["limitations"])
 
-    def test_detailed_results_structure(self):
-        """Test that detailed results have correct structure"""
-        _, _, details = steganography_detection.detect_lsb_steganography(
-            str(self.test_image)
-        )
+    def test_random_10pct_detected_with_estimate(self):
+        r = self.run_on(lsb_replace(self.base, 0.10, self.rng), "r10.png")
+        self.assertIn("warning", self.levels(r))
+        self.assertAlmostEqual(r["details"]["score"], 0.10, delta=0.03)
+        self.assertFalse(r["details"]["sequential_detected"])
 
-        # Check required keys
-        self.assertIn('overall_probability', details)
-        self.assertIn('channel_results', details)
-        self.assertIn('image_info', details)
-        self.assertIn('interpretation', details)
+    def test_random_50pct_not_called_sequential(self):
+        """Regression: the old randomness gate zeroed a 50 % embed."""
+        r = self.run_on(lsb_replace(self.base, 0.50, self.rng), "r50.png")
+        self.assertIn("warning", self.levels(r))
+        self.assertAlmostEqual(r["details"]["score"], 0.5, delta=0.05)
+        self.assertFalse(r["details"]["sequential_detected"])
 
-        # Check channel results
-        for channel in ['red', 'green', 'blue']:
-            self.assertIn(channel, details['channel_results'])
-            channel_data = details['channel_results'][channel]
-            self.assertIn('chi_square_statistic', channel_data)
-            self.assertIn('p_value', channel_data)
-            self.assertIn('steganography_probability', channel_data)
+    def test_sequential_detected_and_localised(self):
+        r = self.run_on(lsb_replace(self.base, 0.25, self.rng, True), "s25.png")
+        self.assertTrue(r["details"]["sequential_detected"])
+        self.assertAlmostEqual(r["details"]["sequential_fraction"], 0.25, delta=0.03)
 
-    def test_extract_lsb_planes(self):
-        """Test LSB plane extraction"""
-        img = Image.open(self.test_image).convert('RGB')
-        img_array = np.array(img)
+    def test_lsb_matching_is_not_detected(self):
+        """Documents a blind spot: ±1 embedding leaves no pair structure."""
+        r = self.run_on(lsb_match(self.base, 0.5, self.rng), "m50.png")
+        self.assertNotIn("warning", self.levels(r))
+        text = " ".join(f["text"] for f in r["findings"])
+        self.assertIn("LSB matching", text)
 
-        lsb_planes = steganography_detection.extract_lsb_planes(img_array)
+    def test_resized_clean_not_flagged(self):
+        """Ported from test_integration: interpolation smooths histograms."""
+        im = Image.fromarray(self.base)
+        for filt in (Image.Resampling.BICUBIC, Image.Resampling.LANCZOS,
+                     Image.Resampling.BILINEAR):
+            with self.subTest(filt=filt.name):
+                r = self.run_on(np.asarray(im.resize((600, 400), filt)),
+                                f"rs_{filt.name}.png")
+                self.assertNotIn("warning", self.levels(r))
 
-        # Check all channels present
-        self.assertIn('red', lsb_planes)
-        self.assertIn('green', lsb_planes)
-        self.assertIn('blue', lsb_planes)
+    def test_jpeg_gets_dct_caveat(self):
+        r = S.analyze_lsb(str(SAMPLE))
+        self.assertEqual(r["status"], "ok")
+        self.assertIn("DCT", r["findings"][0]["text"])
+        self.assertNotIn("warning", self.levels(r))
 
-        # Check LSB planes are binary (0 or 1)
-        for channel, plane in lsb_planes.items():
-            unique_values = np.unique(plane)
-            self.assertTrue(all(v in [0, 1] for v in unique_values))
+    def test_grayscale_single_channel(self):
+        r = self.run_on(np.asarray(Image.fromarray(self.base).convert("L")), "g.png")
+        self.assertEqual(list(r["details"]["estimates"]), ["gray"])
 
-    def test_chi_square_test(self):
-        """Test chi-square statistical test"""
-        # Create a balanced LSB plane (50/50 distribution)
-        balanced_plane = np.random.randint(0, 2, size=(100, 100))
+    def test_degenerate_inputs(self):
+        self.assertEqual(self.run_on(self.base[:1, :1], "t1.png")["status"],
+                         "insufficient_data")
+        self.assertEqual(self.run_on(self.base[:16, :16], "t16.png")["status"],
+                         "insufficient_data")
+        flat = np.full((128, 128, 3), 128, np.uint8)
+        self.assertEqual(self.run_on(flat, "flat.png")["status"], "insufficient_data")
+        self.assertEqual(S.analyze_lsb(str(self.tmp / "missing.png"))["status"], "error")
 
-        chi2_stat, p_value, prob = steganography_detection.chi_square_test(
-            balanced_plane
-        )
-
-        self.assertIsInstance(chi2_stat, float)
-        self.assertIsInstance(p_value, float)
-        self.assertIsInstance(prob, float)
-
-        # For balanced distribution, probability should be relatively low
-        self.assertGreaterEqual(prob, 0.0)
-        self.assertLessEqual(prob, 100.0)
-
-    def test_chi_square_with_biased_data(self):
-        """Test chi-square with obviously biased LSB plane"""
-        # Create heavily biased plane (90% ones)
-        biased_plane = np.ones((100, 100), dtype=np.uint8)
-        biased_plane[:10, :] = 0  # Only 10% zeros
-
-        chi2_stat, p_value, prob = steganography_detection.chi_square_test(
-            biased_plane
-        )
-
-        # Biased data should have high probability
-        self.assertGreater(prob, 50.0)
-
-    def test_analyze_blocks(self):
-        """Test block-based analysis"""
-        img = Image.open(self.test_image).convert('RGB')
-        img_array = np.array(img)
-        lsb_planes = steganography_detection.extract_lsb_planes(img_array)
-
-        heatmap = steganography_detection.analyze_blocks(
-            lsb_planes['red'], block_size=32
-        )
-
-        # Check heatmap dimensions
-        expected_h = img_array.shape[0] // 32
-        expected_w = img_array.shape[1] // 32
-        self.assertEqual(heatmap.shape, (expected_h, expected_w))
-
-        # Check values are probabilities (0-100)
-        self.assertTrue(np.all(heatmap >= 0))
-        self.assertTrue(np.all(heatmap <= 100))
-
-    def test_visual_analysis_map_creation(self):
-        """Test visual analysis map generation"""
-        img = Image.open(self.test_image).convert('RGB')
-        img_array = np.array(img)
-        lsb_planes = steganography_detection.extract_lsb_planes(img_array)
-
-        heatmaps = {
-            channel: steganography_detection.analyze_blocks(plane)
-            for channel, plane in lsb_planes.items()
-        }
-
-        visual_map = steganography_detection.create_visual_analysis_map(
-            img_array, heatmaps
-        )
-
-        # Check that we got a PIL Image
-        self.assertIsInstance(visual_map, Image.Image)
-
-    def test_interpretation(self):
-        """Test result interpretation"""
-        # Test different probability levels
-        low_prob = steganography_detection._interpret_results(15.0)
-        self.assertEqual(low_prob['risk_level'], 'Low')
-
-        medium_prob = steganography_detection._interpret_results(35.0)
-        self.assertEqual(medium_prob['risk_level'], 'Medium')
-
-        high_prob = steganography_detection._interpret_results(65.0)
-        self.assertEqual(high_prob['risk_level'], 'High')
-
-        critical_prob = steganography_detection._interpret_results(85.0)
-        self.assertEqual(critical_prob['risk_level'], 'Critical')
-
-    def test_with_png_format(self):
-        """Test with PNG format"""
-        png_path = self.test_dir / "test_png.png"
-        img = Image.new('RGB', (100, 100), color=(100, 100, 100))
-        img.save(png_path, 'PNG')
-
-        prob, visual_map, details = steganography_detection.detect_lsb_steganography(
-            str(png_path)
-        )
-
-        self.assertIsInstance(prob, float)
-        self.assertIsNotNone(visual_map)
-        self.assertIsInstance(details, dict)
-
-        png_path.unlink()
-
-    def test_with_invalid_path(self):
-        """Test with non-existent file"""
-        prob, visual_map, details = steganography_detection.detect_lsb_steganography(
-            "nonexistent_image.jpg"
-        )
-
-        # Should return error in details
-        self.assertIn('error', details)
-        self.assertEqual(prob, 0.0)
-        self.assertIsNone(visual_map)
-
-    def test_batch_processing(self):
-        """Test batch detection functionality"""
-        images = [str(self.test_image), str(self.stego_image)]
-        results = steganography_detection.batch_detect(images)
-
-        self.assertEqual(len(results), 2)
-        for path in images:
-            self.assertIn(path, results)
-            self.assertIn('probability', results[path])
-
-    def test_stego_image_higher_probability(self):
-        """Test that modified LSB image has higher probability"""
-        # Test normal image
-        prob_normal, _, _ = steganography_detection.detect_lsb_steganography(
-            str(self.test_image)
-        )
-
-        # Test image with modified LSBs
-        prob_stego, _, _ = steganography_detection.detect_lsb_steganography(
-            str(self.stego_image)
-        )
-
-        # Modified image should have higher probability (in most cases)
-        # Note: This might not always be true due to statistical variation
-        # but the test demonstrates the concept
-        self.assertIsInstance(prob_normal, float)
-        self.assertIsInstance(prob_stego, float)
+    def test_no_overclaiming_words(self):
+        r = self.run_on(self.base, "clean2.png")
+        text = (r["summary"] + " ".join(f["text"] for f in r["findings"])).lower()
+        for w in ("authentic", "admissible", "no manipulation", "proves", "genuine"):
+            self.assertNotIn(w, text)
 
 
-class TestSteganographyEdgeCases(unittest.TestCase):
-    """Test edge cases for steganography detection"""
+class TestBenchmark(unittest.TestCase):
+    """Seeded mini-benchmark on bundled photos (full numbers in
+    Descriptions/Steganography.md): FPR on clean PNG and decoded-JPEG covers,
+    TPR for 10 % random LSB replacement, ~0 TPR for LSB matching."""
 
-    @classmethod
-    def setUpClass(cls):
-        cls.test_dir = Path(__file__).parent / "test_images"
-        cls.test_dir.mkdir(exist_ok=True)
-
-    def test_small_image(self):
-        """Test with very small image"""
-        small_path = self.test_dir / "small_stego.jpg"
-        img = Image.new('RGB', (20, 20), color=(128, 128, 128))
-        img.save(small_path, 'JPEG')
-
-        prob, _, details = steganography_detection.detect_lsb_steganography(
-            str(small_path)
-        )
-
-        self.assertIsInstance(prob, float)
-        self.assertNotIn('error', details)
-
-        small_path.unlink()
-
-    def test_grayscale_image(self):
-        """Test with grayscale image converted to RGB"""
-        gray_path = self.test_dir / "gray_test.jpg"
-        img = Image.new('L', (100, 100), color=128)
-        img.save(gray_path, 'JPEG')
-
-        # The function converts to RGB internally
-        prob, _, details = steganography_detection.detect_lsb_steganography(
-            str(gray_path)
-        )
-
-        self.assertIsInstance(prob, float)
-
-        gray_path.unlink()
-
-    @classmethod
-    def tearDownClass(cls):
-        if cls.test_dir.exists() and not any(cls.test_dir.iterdir()):
-            cls.test_dir.rmdir()
+    def test_fpr_tpr(self):
+        rng = np.random.default_rng(7)
+        covers = [np.asarray(Image.open(SAMPLE).convert("RGB"))]
+        covers += [getattr(skd, n)() for n in
+                   ("astronaut", "coffee", "chelsea", "camera", "rocket",
+                    "coins", "moon", "gravel")]
+        clean = [score(c) for c in covers]
+        clean += [score(decode_jpeg(c, q)) for c, q in zip(covers, (75, 85, 95, 100) * 3)]
+        r10 = [score(lsb_replace(c, 0.10, rng)) for c in covers]
+        m25 = [score(lsb_match(c, 0.25, rng)) for c in covers]
+        fpr = np.mean(np.array(clean) > S.THRESHOLD)
+        tpr = np.mean(np.array(r10) > S.THRESHOLD)
+        mae = np.mean(np.abs(np.array(r10) - 0.10))
+        self.assertLessEqual(fpr, 0.06, clean)
+        self.assertGreaterEqual(tpr, 0.9, r10)
+        self.assertLess(mae, 0.03)
+        self.assertLessEqual(np.mean(np.array(m25) > S.THRESHOLD), 0.12)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

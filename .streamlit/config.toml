@@ -1,6 +1,6 @@
 [theme]
 base="dark"
-primaryColor="#00ff41"
+primaryColor="#4c8dff"
 backgroundColor="#0e1117"
 secondaryBackgroundColor="#262730"
 textColor="#fafafa"
@@ -8,10 +8,11 @@ font="sans serif"
 
 [server]
 headless = true
+maxUploadSize = 25  # MB; with the 40 MP pixel cap in app.py
 port = 8501
 
 [client]
-showErrorDetails = true
+showErrorDetails = "type"
 
 [logger]
 level = "info"

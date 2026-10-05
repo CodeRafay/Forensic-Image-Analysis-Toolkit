@@ -1,253 +1,155 @@
-# 💾 Quantization Table Analysis
-
-## What is a Quantization Table?
-
-The quantization table is the **"recipe" JPEG uses to compress images**. It's a hidden grid of numbers that tells the compression algorithm how much to simplify different frequencies in the image. Every JPEG editor and camera uses slightly different recipes.
-
-Think of it like a **fingerprint of the compression process**:
-
-- Each camera brand has unique quantization tables
-- Photo editors have their own tables
-- Analyzing these tables reveals the image's compression history
-
-## What Does Quantization Table Analysis Measure?
-
-- **Quantization matrix values** (8×8 grid of compression coefficients)
-- **Quality estimation** (approximate JPEG quality level: 0-100)
-- **Compression history** (single vs. double compression)
-- **Software signatures** (identifies camera/editor used)
-- **Table consistency** (does the table match claimed source?)
-
-## How to Interpret Results
-
-### ✅ Normal Patterns (Likely Authentic)
-
-1. **Single Compression**
-
-   - Clean quantization table matching camera manufacturer
-   - Quality estimate aligns with camera settings
-   - No signs of re-compression
-
-2. **Consistent Software**
-
-   - Table matches known camera brand (Canon, Nikon, Sony)
-   - Or matches claimed editing software (if metadata shows editing)
-
-3. **Reasonable Quality**
-   - Quality level appropriate for image source
-   - Professional cameras: 90-100
-   - Phone cameras: 85-95
-   - Social media: 70-85
-
-### ⚠️ Suspicious Patterns (Possible Manipulation)
-
-1. **Double Compression**
-
-   - Evidence of two different quantization tables
-   - Suggests image was edited and re-saved
-   - Different quality levels detected
-
-2. **Quality Mismatch**
-
-   - Low quality (60-70) but metadata claims high-end camera
-   - Or suspiciously high quality (95-100) for a phone photo
-
-3. **Software Mismatch**
-
-   - Table indicates Adobe Photoshop
-   - But metadata claims "never edited"
-
-4. **Inconsistent Tables**
-
-   - Different parts of image show different quantization
-   - Clear sign of splicing from multiple sources
-
-5. **Generic/Unknown Tables**
-   - Table doesn't match any known camera or software
-   - May indicate custom editing or forgery tools
-
-## Common Artifacts Detected
-
-### 1. **Double Compression (Strongest Indicator)**
-
-**What happens:**
-
-- Original image saved at Quality 95 (Camera)
-- Image edited and re-saved at Quality 85 (Photoshop)
-- Two overlapping quantization patterns detected
-
-**Visual example:**
-
-```
-First Compression:  [Canon EOS table, Q=95]
-Second Compression: [Photoshop table, Q=85]
-```
-
-**Analysis**: Image was edited after capture
-
-### 2. **Software Fingerprinting**
-
-**Camera Tables:**
-
-- Canon: Characteristic values [16, 11, 10, 16, ...]
-- Nikon: Different pattern [8, 6, 5, 8, ...]
-- iPhone: Apple-specific tables
-
-**Editor Tables:**
-
-- Photoshop: IJG (Independent JPEG Group) standard
-- GIMP: LibJPEG defaults
-- Online tools: Generic web-optimized tables
-
-**Detection:**
-If metadata says "iPhone 14 Pro" but table shows Photoshop signature → edited!
-
-### 3. **Quality Degradation Chain**
-
-```
-Original:     Quality 100 (Camera)
-   ↓
-Edit 1:       Quality 90  (Photoshop)
-   ↓
-Edit 2:       Quality 80  (GIMP)
-   ↓
-Upload:       Quality 70  (Social Media)
-```
-
-**Analysis**: Each re-save leaves quantization traces
-
-### 4. **Splicing Detection**
-
-- **Top half of image**: Canon quantization table
-- **Bottom half of image**: iPhone quantization table
-  **Analysis**: Two images merged together
-
-### 5. **Quality "Too Good to Be True"**
-
-- **Claimed source**: Instagram screenshot
-- **Detected quality**: 98 (nearly lossless)
-  **Analysis**: Quality impossibly high for claimed source
-
-## Real-World Examples
-
-### Case 1: Fake Celebrity Photo
-
-```
-Metadata: "iPhone 13, never edited"
-Quantization Analysis:
-  - Primary table: iPhone (matches claim)
-  - Secondary table: Photoshop detected
-  - Quality: 90 → 75 (double compression)
-```
-
-**Verdict**: Photo was edited despite metadata claim
-
-### Case 2: Forged Document
-
-```
-Claimed: "Scanned from paper at 300 DPI"
-Quantization Analysis:
-  - Table: Canon DSLR signature
-  - Quality: 95 (too high for scanner)
-```
-
-**Verdict**: Not a scan, photographed with DSLR, then altered
-
-### Case 3: Social Media Evidence
-
-```
-Claimed: "Original photo from Samsung Galaxy"
-Quantization Analysis:
-  - Table: Twitter/X recompression signature
-  - Quality: 85 (social media quality)
-```
-
-**Verdict**: This is a downloaded social media copy, not original
-
-## Visual Analogy
-
-Imagine quantization tables like **compression "DNA"**:
-
-**Camera brands** = Different species (Canon DNA vs. Nikon DNA)
-**Photo editors** = Lab-created modifications (Photoshop DNA)
-**Double compression** = Hybrid DNA showing two parent sources
-**Quality level** = DNA completeness (100% vs. 70% intact)
-
-When you find:
-
-- Canon DNA + Photoshop DNA → Photo was edited
-- Two different camera DNA patterns → Two photos spliced together
-- DNA quality drops → Multiple editing generations
-
-## Limitations
-
-### ⚠️ Important Caveats
-
-1. **Social Media Strips Tables**
-
-   - Platforms like Facebook, Twitter recompress everything
-   - Original quantization tables are lost
-   - Can only analyze platform's compression
-
-2. **Modern Cameras Pre-Process**
-
-   - In-camera processing applies initial quantization
-   - Some editing may be "legitimate" camera processing
-
-3. **Can't Distinguish Why**
-
-   - Table shows editing occurred
-   - But can't tell if editing was innocent (crop, rotate) or malicious (forgery)
-
-4. **Lossless Edits Are Invisible**
-
-   - If someone edits using lossless PNG, then converts to JPEG
-   - Only final JPEG quantization is visible
-
-5. **Quality Estimates Are Approximate**
-
-   - "Quality 85" is an estimate, not exact
-   - Range of ±5 is normal
-
-6. **Custom Tables Possible**
-   - Advanced users can use custom quantization tables
-   - This can obscure software fingerprints
-
-## Best Practices
-
-✔️ **Compare table to metadata** (does camera match claimed device?)  
-✔️ **Look for double compression** (strongest manipulation indicator)  
-✔️ **Check quality estimates** (reasonable for source?)  
-✔️ **Cross-reference with software tags** in metadata  
-✔️ **Test consistency** across image regions  
-✔️ **Use with other techniques** (ELA, histogram) for full picture
-
-## Key Questions to Ask
-
-1. Does the quantization table match the claimed camera/source?
-2. Is there evidence of double compression?
-3. Is the quality level reasonable for this source?
-4. Do metadata and quantization table tell the same story?
-5. Are different parts of the image using different tables?
-6. Does the compression history make logical sense?
-
-## Practical Tips
-
-### Reading Quantization Tables:
-
-- **Lower numbers** = Less compression (higher quality)
-- **Higher numbers** = More compression (lower quality)
-- **Top-left values** = Most important (low frequencies)
-- **Bottom-right values** = Less important (high frequencies)
-
-### Quality Scale:
-
-- **95-100**: Professional/archival quality
-- **85-94**: High-quality photos, good cameras
-- **75-84**: Standard web quality, social media
-- **60-74**: Heavy compression, quality loss visible
-- **Below 60**: Severe compression, obvious artifacts
-
----
-
-_Quantization table analysis is like forensic chemistry – each camera and editor leaves a unique molecular signature. By analyzing these signatures, we can trace the image's journey from capture to current state._
+# Quantization Tables & Double-JPEG Localization
+
+Two tabs work from the JPEG file's own compression data. Neither can say an
+image is genuine; they report what the last encoder was and whether parts of
+the image carry a different compression history.
+
+## 1. Quantization table (`analysis/quant_table.py`)
+
+### What the code does
+- Reads the DQT tables through Pillow's JPEG decoder (a raw byte search for
+  `FFDB` finds fake tables inside scan data and XMP).
+- **Estimated quality**: the tables libjpeg builds for q = 1…100
+  (`scale = 5000/q` below 50, `200 − 2q` above; `Q = (T50·scale + 50)/100`,
+  clipped to 1…255) are compared entry for entry; an exact match gives that
+  q (exact for every libjpeg quality; chroma q1–3 share one table, reported
+  as 3). Other tables fall back to inverting the scaling with the median
+  over non-clipped entries — a rough equivalent only.
+- **IJG-standard?** Checks whether the table is one scale factor times the
+  ITU-T T.81 Annex K reference table (within integer rounding).
+- **Encoder family hint**
+  - all tables IJG-scaled → *IJG/libjpeg family*: typical of software saves
+    (PIL, OpenCV, GIMP, many web and AI pipelines). Some cameras also use them.
+  - any table not IJG-scaled → *custom tables*: typical of camera vendor
+    firmware or an editor with its own tables such as Photoshop.
+  - all entries 1 (quality ≈ 100) → *cannot classify*: every encoder produces
+    this table.
+- EXIF Make / Model / Software (Pillow `getexif`) are listed beside the hint
+  as context only. EXIF can be edited, and no camera-table database is used,
+  so a camera claim can't be confirmed or refuted from the tables.
+
+### Reading the output
+| Item | Meaning |
+|---|---|
+| `Table N estimated quality (IJG)` | IJG quality that produces this table (exact for libjpeg tables). Only an approximate equivalent for custom tables |
+| `Table N IJG-standard` | yes/no, see above |
+| Tables | the 8×8 tables in raster order (top-left = DC / low frequencies) |
+
+Non-JPEG files return `not_applicable`.
+
+### What it cannot tell you
+- Only the **last** save is visible. Earlier saves, edits made before that
+  save, and lossless edits don't show up here.
+- An IJG table on a file whose EXIF names a camera can mean a later software
+  re-save, or a camera that uses IJG tables. It is not proof of editing.
+
+## 2. Double-JPEG localization (`analysis/double_jpeg.py`)
+
+Method: T. Bianchi & A. Piva, *Image Forgery Localization via Block-Grained
+Analysis of JPEG Artifacts*, IEEE TIFS 7(3), 2012. Grid search for the
+non-aligned case follows Bianchi & Piva, *Detection of Nonaligned Double JPEG
+Compression Based on Integer Periodicity Maps*, IEEE TIFS 2012.
+
+### Idea
+When a JPEG (first quantization step Q1) is edited and saved again (Q2), the
+untouched areas are quantized twice. A pasted region, once decoded onto the
+file's grid, is quantized only once. Doubly quantized coefficients cluster
+on the Q1 lattice, seen through the Q2 bins; singly quantized (tampered)
+blocks follow the smooth single-compression histogram.
+
+### What the code does
+1. Decodes the **luminance exactly as stored** (Pillow `draft("YCbCr")`, no
+   RGB round trip), takes the 8×8 DCT on the file's grid and divides by the
+   stored luminance table Q2 to get the coefficient indices x.
+2. Estimates the unquantized coefficient density from the image itself: the
+   DCT on a grid shifted by (4, 4) px (calibration).
+3. **Full H0 model** (paper's version with the error term): a twice
+   compressed coefficient is `Q1·k + e`, e the rounding/truncation error of
+   the first decompression (Gaussian, variance s²), then binned by Q2:
+   `p(x|H0) = Σ_k P(Q1 cell k) · P(Q2(x−½) ≤ Q1·k + e < Q2(x+½))`.
+   H1 is the calibrated density in Q2 bins. The earlier hard model
+   (`n(x)`, zero probability off the lattice) scored any odd coefficient of
+   a smooth block as "tampered" when Q1 = 2·Q2 (90 → 95) — the source of
+   the false regions on unspliced files.
+4. **Q1 jointly**: one IJG primary quality (1…100, i.e. a whole luminance
+   table) is chosen by maximum likelihood over the first 9 AC frequencies
+   together, then s² from {0.1, 0.2, 0.35, 0.6, 1.0}. Per frequency the
+   mixture weight is fitted by EM; frequencies where Q1 divides Q2 are
+   skipped. A frequency counts when the model gains ≥ 0.05 log-likelihood
+   per coefficient. Neighbouring qualities can share these 9 entries, so the
+   reported earlier quality can be off by 1 (75 → reported 74).
+5. Fit and per-block score use **non-zero** coefficients only, and only
+   blocks with **≥ 4 non-zero AC coefficients** vote (flat blocks carry no
+   lattice evidence). Per block `log L = Σ_f log(p1/p0)`, 5×5-block median
+   filter, `p = sigmoid(log L)`.
+6. **Non-aligned case** (cropped or shifted between saves). Integer
+   periodicity `|E exp(2πi·y/Q)|` of the DCT coefficients is measured on all
+   49 grid shifts with dy, dx ≠ 0. If the best shift's robust z ≥ 8, H0 is a
+   Q1 lattice plus Gaussian noise of the second compression and H1 the
+   calibrated density at that shift.
+
+### Reading the output
+| Metric | Meaning |
+|---|---|
+| Model | `aligned`, `non-aligned` (with primary grid shift), or `none` |
+| Estimated primary quality (IJG) | earlier save quality (aligned model) |
+| Frequencies with double-JPEG evidence | out of 9; the table gives Q2, Q1, mixture weight, gain |
+| Blocks with p(tampered)>0.5 | share of voting blocks |
+| Largest inconsistent region | largest connected p > 0.5 region, share of all blocks |
+
+- **warning**: a connected region ≥ 4.5 % of the blocks doesn't follow the
+  double-compression pattern, and ≥ 6/9 frequencies carry the trace.
+- **notice**: evidence in only 1–5 frequencies — a weak double compression
+  or a chance fit on a singly compressed file. No map-based finding.
+- **info / none**: no double-compression trace (singly compressed, or the
+  blind spot below).
+
+### Measured (hold-out set)
+Thresholds were set on a calibration set (4 skimage photos + 4
+camera-pipeline images: Bayer RGGB mosaic, shot + read noise, bilinear
+demosaic, optional sharpening; seed 11). Numbers below are from a different
+set: the sample image, 4 other skimage photos and 4 camera-pipeline images
+of other scenes/seeds (9 hosts). Splices are 1/9 of the area, pasted from an
+uncompressed other host.
+
+| Case | Result |
+|---|---|
+| Single JPEG q75/85/92 (27) | 0 warnings, 0 frequencies with evidence |
+| Aligned double JPEG, no splice: 70→90, 85→95, **90→95**, **80→85**, 60→75, 75→92 (54) | 0 warnings (largest region 1.2 %; review had 2/11, 2/11, 5/11, 5/11 on four of these) |
+| Splice, aligned, 65→90 / 75→95 / 90→95 / 80→85 / 60→80 (45) | 40/45 warned (80→85: 6/9), median block IoU 0.84 |
+| Crop (r, c ≥ 1) between saves + splice, 70→90 (9) | 5/9 warned, median IoU 0.39 — weak |
+| Same crop, no splice (9) | 1/9 warned (12.9 % region) |
+
+The sample image host is the main miss: its splices reach only 3–5 %
+regions (IoU ≈ 0.3). On the calibration set the largest unspliced region was
+3.9 % (90 → 95).
+
+12 MP JPEG (4000×3000, 70 → 90 with splice): about 10 s, ~240 MB peak traced
+memory. The quantization-table tab takes 0.1 s.
+
+### The bundled sample image
+`sampleImg.jpeg` (darktable export, q95) shows a trace in 9/9 frequencies
+with earlier quality ≈ 90. The map marks the composited saucer and the area
+under it, but **also** sky and dark-corner regions of similar size; the
+largest region reported in the warning (11.4 %, top-left sky) is not the
+saucer. At this q90 → 95 setting, unspliced files gave 0/9 hold-out (max
+1.2 %) and 0/8 calibration (max 3.9 %) false warnings, so an 11 % region is
+unusual — but the map does not single out the saucer and should not be read
+as locating it.
+
+### Limitations
+- **Blind spot**: earlier quality ≥ final quality (Q1 ≤ Q2). Q1 = Q2, or Q1
+  dividing Q2, leaves no trace by construction; other Q1 < Q2 leave a weak
+  trace this model does not use (95 → 75, 90 → 70: no trace found). Close
+  qualities (80 → 85) give a weak, partial map.
+- The primary table is assumed IJG-scaled; camera vendor tables are matched
+  to the nearest IJG quality, which can lose frequencies.
+- A region pasted from another JPEG with the same grid and quality looks
+  untouched.
+- Flat or saturated areas carry no evidence and don't vote.
+- Resizing, rotation or strong filtering after the first save erases the
+  trace.
+- Non-aligned localization is weak (median IoU 0.39) and has false regions;
+  crops that keep one grid axis aligned aren't searched.
+- Resolution is one 8×8 block; regions under about 5×5 blocks are removed by
+  the median filter.

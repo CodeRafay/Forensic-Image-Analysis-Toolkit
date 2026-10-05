@@ -11,6 +11,7 @@ _MODULE_NAMES = [
     "noise_map",
     "jpeg_ghost",
     "quant_table",
+    "double_jpeg",
     "cmfd",
     "prnu",
     "frequency_analysis",
