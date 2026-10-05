@@ -33,6 +33,16 @@ tabs reading keys their module never returned, and every image over 2048 px
 being re-saved at JPEG q95 before analysis, destroying the compression
 evidence the JPEG tabs look for.
 
+### Added
+
+- **Example gallery** — nine images in `assets/examples/`, selectable from
+  the sidebar, each with one known edit or property that a technique detects
+  (ELA, JPEG ghost, Copy-Move, Resampling, Histogram, Steganography,
+  Metadata, Noise, PRNU). Noise and PRNU use four CC0 iPhone 5c photos from
+  Wikimedia Commons (`assets/examples/source/CREDITS.md`).
+  `scripts/make_examples.py` rebuilds the gallery and fails if a technique
+  stops catching its example.
+
 ### Changed - Per module
 
 - **ELA** (`ela.py`) — Krawetz 2007 with one error definition (max over RGB of
@@ -109,7 +119,9 @@ evidence the JPEG tabs look for.
   longer collide); in-app "indicators, not proof" disclaimer; results cached
   per image. Fixed: the > 2048 px JPEG q95 re-save before analysis is gone —
   all tabs read the original bytes; copy-move uses an in-memory downscale to
-  2048 px and reports the analysed size.
+  2048 px and reports the analysed size. Emojis removed from the interface,
+  neutral blue theme, file format/size shown next to the image, ledger
+  statistics shown as metrics.
 
 ### Changed - Breaking
 
