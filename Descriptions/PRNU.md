@@ -1,292 +1,191 @@
-# 📡 PRNU Analysis (Photo Response Non-Uniformity)
+# PRNU — Sensor Fingerprint
 
-> ## 📌 How To Get A Reliable Camera Match
->
-> **Upload more than one reference image.** The fingerprint is averaged across
-> whatever references you give it, and accuracy climbs sharply:
->
-> | Reference images | Same camera | Different camera |
-> | ---------------- | ----------- | ---------------- |
-> | 1 | +0.28 | −0.01 |
-> | 2 | +0.47 | −0.00 |
-> | 4 | +0.51 | +0.00 |
->
-> Non-matching sensors land within about ±0.012 of zero, so anything above
-> **0.05** means the same sensor and above **0.15** means it confidently.
->
-> **References must be the same pixel dimensions as the test image.** The
-> fingerprint is pixel-aligned to the sensor, so a resized reference cannot be
-> compared and will be skipped.
->
-> Best references are ordinary photos from the camera — ideally bright, evenly
-> lit ones, since PRNU is multiplicative and therefore strongest where the
-> image is bright.
+## What it is
 
-## What is PRNU Analysis?
+Each pixel of a camera sensor converts light with a slightly different gain.
+That gain error is fixed for the life of the sensor and multiplies the scene:
 
-PRNU is like the **"fingerprint of a camera sensor"** – every physical camera sensor has tiny imperfections that create a unique, nearly invisible pattern in every photo it takes. This fingerprint is so distinctive it can identify exactly which camera took the photo.
+    I = I0 + I0·K + noise
 
-Think of it like:
+`K` (the PRNU) is a fingerprint of the individual sensor, not just the model.
+With reference photos from a candidate camera you can test whether a photo
+carries that camera's fingerprint, and check whether any region lacks it.
 
-- **Ballistics analysis** where every gun creates unique striations on bullets
-- **Ink analysis** where every printer produces a unique color pattern
-- **Handwriting analysis** where individual quirks identify a person
-- **Retinal scan** – each eye is unique, each sensor is unique
+## What the code does
 
-## What Does PRNU Analysis Measure?
+Implementation follows the Camera-Fingerprint reference toolbox:
 
-- **Sensor imperfections** (manufacturing defects)
-- **Photo response** (how each pixel responds to light)
-- **Noise patterns** unique to specific hardware
-- **Camera identification** (which camera took this photo)
-- **Forgery detection** (did multiple cameras take this image?)
-- **Device matching** (does photo match claimed camera?)
+1. **NoiseExtract** (Lukáš, Fridrich & Goljan 2006): 4-level db4 (8-tap)
+   wavelet transform. Each detail coefficient is Wiener-attenuated with a
+   local variance, the minimum over 3/5/7/9 windows, and σ0 = 3. The
+   approximation band is zeroed. What is left is the noise residual `W`.
+2. **ZeroMeanTotal**: removes row and column means on each of the four 2×2
+   sub-lattices. This takes out CFA and JPEG row/column artifacts that every
+   camera of a model shares.
+3. **Fingerprint** (Chen et al. 2008 maximum-likelihood estimate):
+   `K = Σ W·I / Σ I²` over the references, with saturated pixels (≥ 250)
+   excluded. Then ZeroMeanTotal again.
+4. **WienerInDFT** (Goljan et al. 2009), applied to `K` (σ = std K) and to
+   the test residual (σ = std W). It Wiener-filters the DFT magnitude and
+   keeps the phase, which flattens isolated spectral peaks (periodic,
+   model-shared patterns) while white-noise content passes. Checked in the
+   unit test: an injected period-8 pattern and a checkerboard drop from
+   50–300× the median spectrum to ≤ 3×, and the white part keeps NCC > 0.99.
+5. **Matching**: the test residual is correlated with `I_test·K`.
+   - **NCC**: normalised correlation.
+   - **PCE** (peak-to-correlation energy): `sign(C₀)·C₀² / mean(C²)` over the
+     circular cross-correlation `C`, with the 11×11 neighbourhood of the
+     zero-shift peak excluded. **Decision: PCE > 60** (the standard
+     threshold from Goljan, Fridrich & Filler 2009, which measured a
+     false-alarm rate of about 2.4·10⁻⁵ on over a million Flickr images).
+6. **Local integrity test** (predictor from Chen, Fridrich, Goljan & Lukáš
+   2008; decision from Chierchia, Poggi, Sansone & Verdoliva 2014). This runs
+   only when PCE > 60 and at least 2 references are given.
+   - The image is split into 128×128 blocks at stride 32. For each block the
+     code computes the observed correlation ρ between `W` and `I·K`.
+   - A **correlation predictor** ρ̂ (second-order polynomial in Chen's
+     intensity, texture and flatness features) is fitted by least squares on
+     every reference, each on one 1024×1024 window against its
+     leave-one-out fingerprint (windows cycle over the frame).
+   - σ0 ("no fingerprint") comes from correlating with circularly shifted
+     fingerprints; σ̂ is the predictor's residual spread.
+   - Per-block log-likelihood ratio λ = log N(ρ; 0, σ0) − log N(min(ρ, ρ̂);
+     ρ̂, σ̂) (one-sided: a block above its prediction never counts as
+     missing).
+   - **Bayesian MRF**: labels u (1 = fingerprint absent) minimise
+     Σ u·(γ − λ) + β·#(disagreeing 8-neighbours), γ = 2, β = 0.5. The
+     energy is minimised **exactly by an s–t minimum cut** (scipy
+     `maximum_flow`) on the block grid. The paper works per pixel; this
+     implementation works on the block grid.
+   - A block is **testable** when it is not dark (block mean < 40), saturated
+     (> 250) or almost fully flat, and ρ̂ ≥ σ0. Regions of fewer than 16
+     labelled testable blocks are dropped.
+   - If **fewer than 10 % of blocks are testable**, the local test reports
+     *insufficient data* and draws no overlay. Before this change a dark or
+     flat image gave the misleading "0 blocks tested, nothing found".
 
-## How to Interpret Results
+Images are analysed at **full resolution** up to `max_px` per side
+(default 4096, so 4000×3000 is uncropped); larger ones are
+**centre-cropped**, never resized, because resampling destroys the
+pixel-aligned pattern. References are cropped identically and must have the
+same original pixel size as the test image. Everything is float32, and the
+references are streamed: the running sums ΣW·I and ΣI² are updated one
+reference at a time (two in parallel threads).
 
-### ✅ Normal Patterns (Likely Authentic)
+## Reading the output
 
-1. **Single Camera Fingerprint**
+| Output | Meaning |
+|---|---|
+| Residual std | Strength of the extracted noise, in grey levels. Near 0 means flat or synthetic content (`insufficient_data`). |
+| No references | Status `ok`, with "no reference fingerprint — camera identification not possible". Only residual statistics are shown. |
+| References of a different size | Status `not_applicable`. The fingerprint is pixel-aligned, so rotated, resized or cropped references cannot be used. |
+| PCE > 60 | The image carries the reference camera's fingerprint (info). |
+| PCE ≤ 60 | Notice: no match. This does **not** exclude the camera, because JPEG, resizing, denoising, digital zoom or a different crop remove the match. |
+| NCC | Shown for reference. It depends on image size and content, so the decision uses PCE. |
+| Blocks tested / untestable, Testable fraction | How much of the image the local test could actually evaluate. Grey in the overlay means untestable. Below 10 % the local test reports *insufficient data*. |
+| Regions lacking the fingerprint | Warning. Testable blocks labelled by the MRF as having a correlation consistent with "no fingerprint" where the predictor expects one. This fits content from another source (splice) or strong local processing. The table gives each region's bounding box in original-image coordinates, with observed and predicted correlation. |
 
-   - Strong PRNU correlation from one camera
-   - Consistent pattern throughout image
-   - Matches claimed device
+Images returned: the zero-meaned noise residual and, when the local test ran,
+an overlay (red = fingerprint missing, grey = untestable).
 
-2. **High Correlation Score**
+## Measured performance (camera simulator, hold-out)
 
-   - Typically > 0.010 indicates strong camera match
-   - All regions show similar fingerprinting
+Simulator (`scratchpad` scripts, seeded): scene (upscaled skimage photo) →
+Bayer RGGB raw · (1 + K) → shot noise (variance 0.3·I) + read noise (σ 2) →
+8-bit → OpenCV **bilinear demosaic** → JPEG q. K ~ N(0, σ²) with
+realistic σ = 0.003, 0.006 and 0.01. The thresholds were chosen on set A
+(scenes astronaut … horse, seeds 1xxx); every number below is from
+**set B** (different scenes: clock, moon, camera, brick, grass, gravel,
+cell, hubble, text; different seeds).
 
-3. **Device Consistency**
-   - Photo matches known PRNU of claimed camera
-   - If metadata says "iPhone 13", PRNU matches iPhone 13 characteristic pattern
+**Camera matching (PCE > 60)**, same camera, share of 24 test shots
+(2 cameras × 4 shots × JPEG q75/85/95), by size and number of references:
 
-### ⚠️ Suspicious Patterns (Possible Manipulation)
+| Size | K σ | 1 ref | 4 refs | 8 refs |
+|---|---|---|---|---|
+| 1 MP | 0.003 | 0 % | 0 % | 0 % |
+| 1 MP | 0.006 | 0 % | 46 % | 75 % |
+| 1 MP | 0.01 | 38 % | 96 % | 96 % |
+| 4 MP | 0.003 | 0 % | 12 % | 38 % |
+| 4 MP | 0.006 | 38 % | 96 % | 96 % |
+| 4 MP | 0.01 | 46 % | 100 % | 100 % |
+| 12 MP | 0.003 | 4 % | 38 % | 83 % |
+| 12 MP | 0.006 | 79 % | 100 % | 100 % |
+| 12 MP | 0.01 | 92 % | 100 % | 100 % |
 
-1. **Multiple Fingerprints**
+Different camera: **0 / 648** comparisons above 60 (max PCE 18.8).
+The match rate is driven by pixel count and reference count much more than
+by JPEG quality: a weak fingerprint (σ 0.003) is essentially never found
+below 4 MP, and one reference is rarely enough. This is why the default no
+longer crops to 2048 px.
 
-   - Different regions show different camera signatures
-   - Indicates splicing from multiple cameras
+**Local splice test** (4 MP = 2048×2048, 8 references, a square from the
+other camera's shot of the same scene pasted in; "found" = a flagged block
+centred inside the square; only shots with PCE > 60):
 
-2. **Low Correlation**
+| K σ, JPEG | clean shots with a false region | 192 px | 256 px | 384 px | 512 px |
+|---|---|---|---|---|---|
+| 0.01, q95 | 2/11 | 10/11 | 11/11 | 11/11 | 11/11 |
+| 0.01, q85 | 0/12 | 2/12 | 8/12 | 12/12 | 10/12 |
+| 0.01, q75 | 0/8 (4 insufficient) | 0/8 | 3/8 | 5/8 | 7/8 |
+| 0.006, q85 | 1/8 (4 insufficient) | 0/8 | 0/8 | 0/8 | 0/8 |
+| 0.003, q85 | 10/12 shots do not match; local test not run | | | | |
 
-   - No strong PRNU match to any camera
-   - Could indicate heavy editing or compression
+Pooled clean false-alarm rate on the hold-out: **3/39 (8 %)**; on the
+calibration set it was 0/24. False regions come from content the predictor
+models poorly (very textured or dark scenes). **At a realistic σ = 0.006
+the local test does not detect splices of any tested size (≤ 512 px).** It
+works only when the fingerprint is strong (σ ≈ 0.01) and the image is
+lightly compressed. Treat a reported region as a lead to examine, and an
+empty result as no evidence either way.
 
-3. **Mismatched Device**
+**Cost** at 12 MP (4000×3000 JPEG), 8 references, measured with
+tracemalloc on a shared (busy) 8-core machine: 28 s, 650 MB peak; without
+references 4 s, 205 MB.
 
-   - Metadata claims iPhone 13
-   - But PRNU matches Canon EOS pattern
-   - Photo not taken by claimed device
+Real cameras differ from this simulation. In-camera denoising, sharpening,
+lens correction and firmware artifacts are not modelled. Real-data
+calibration (for example on the Dresden database) has not been done here.
 
-4. **Inconsistent Regions**
+`tests/test_prnu.py` reruns a small version (1 MP, σ 0.01, q92, 2 cameras ×
+8 references): ≥ 80 % same-camera matches, 0 cross-camera matches, 0 clean
+false regions, a 384 px splice found in ≥ 50 % of matched shots. It also
+checks that a mostly saturated frame reports *insufficient data* and that
+the min-cut is exact on small grids.
 
-   - Background shows Camera A fingerprint
-   - Foreground shows Camera B fingerprint
-   - Clear sign of composite image
+## Practical advice
 
-5. **Edited Regions**
-   - Pasted content lacks proper PRNU
-   - Added elements show different fingerprint
-
-## Common Applications
-
-### 1. **Camera Identification**
-
-```
-Input: Photo of unknown origin
-Output: "This photo was taken by Canon EOS 5D Mark IV, serial #ABC123"
-```
-
-**Use case**: Tracing source of leaked images
-
-### 2. **Forgery Detection**
-
-```
-Detected PRNU Pattern 1: iPhone 13 (foreground)
-Detected PRNU Pattern 2: Android Galaxy (background)
-Verdict: Composite image from two cameras
-```
-
-**Use case**: Detecting spliced images
-
-### 3. **Image Authentication**
-
-```
-Metadata claim: "Shot on iPhone 14 Pro"
-PRNU analysis: Matches iPhone 14 Pro ✓
-Verdict: Claim is authentic
-```
-
-**Use case**: Verifying image source in legal proceedings
-
-### 4. **Content Verification**
-
-```
-Multiple photos submitted as "authentic coverage"
-PRNU: All from same camera with same settings
-Verdict: Likely legitimate series, not cherry-picked
-```
-
-**Use case**: Validating journalistic integrity
-
-## Detection Process Explained
-
-Recovering a sensor fingerprint takes more than a high-pass filter. A plain
-high-pass leaves **scene edges** dominant, and correlating two such outputs
-measures whether two pictures show the same *view*, not whether they came from
-the same *camera*. Four stages are needed:
-
-### Step 1: Wavelet Noise Residual
-
-- Denoise the image with a wavelet filter, then subtract: `W = I − denoise(I)`
-- Wavelet denoising separates sensor noise from scene structure far better
-  than a Gaussian blur, which simply returns the edges
-
-### Step 2: Zero-Mean
-
-- Subtract row means and column means
-- Colour-filter-array interpolation and JPEG blocking leave artifacts shared by
-  *every* camera of a model; these live in the row/column means
-- Without this, two unrelated cameras correlate through their common processing
-
-### Step 3: Wiener Filtering in the Frequency Domain
-
-- Suppresses whatever periodic structure survives step 2
-- In testing this roughly doubled the single-reference match strength
-
-### Step 4: Intensity-Modulated Correlation
-
-- PRNU is **multiplicative** (`I = I₀ + I₀·K`), so it is stronger in bright
-  regions than dark ones
-- The test residual is therefore compared against `I_test × K`, not against
-  `K` alone
-- The fingerprint itself uses the maximum-likelihood estimator
-  `K = Σ(Wᵢ·Iᵢ) / Σ(Iᵢ²)`, weighting each reference by its exposure
-
-### Result Interpretation
-
-- Correlation **> 0.15** = confident same-sensor match
-- Correlation **> 0.05** = probable match
-- Correlation **≈ 0** (within ±0.012) = different sensor
-- Blocks that individually fall below 0.05 inside an otherwise matching image
-  are flagged as **spliced from another sensor**
-
-## Real-World Examples
-
-### Case 1: Evidence Authentication
-
-```
-Submitted as evidence: Security camera footage
-Metadata: "Unknown source"
-PRNU Analysis: Matches Hikvision DS-2CD2143G0 camera
-Serial pattern matches: Camera #47 in building database
-Verdict: Verified as security camera footage
-```
-
-### Case 2: Synthetic Content Detection
-
-```
-Social Media Claim: "I took this photo"
-Claimed camera: iPhone 15 Pro
-PRNU Analysis: No known camera fingerprint detected
-Result: Photo is either heavily edited or AI-generated
-```
-
-### Case 3: Spliced Composite
-
-```
-Analyzed image: Celebrity in compromising situation
-Background PRNU: Matches Nikon D850
-Foreground PRNU: Matches Canon R5
-Verdict: Different camera sources, likely composite
-```
-
-## PRNU vs. Other Techniques
-
-| Technique    | Detects                           | Strength                | Limitation                  |
-| ------------ | --------------------------------- | ----------------------- | --------------------------- |
-| **PRNU**     | Multiple cameras, device matching | Identifies exact camera | Requires reference database |
-| **ELA**      | Compression differences           | Shows edited regions    | Doesn't identify camera     |
-| **Metadata** | Software history                  | Shows editing software  | Can be faked                |
-| **Noise**    | Sensor patterns                   | Detects splicing        | Less precise than PRNU      |
+- Use at least 8 reference images, ideally 20 or more. Bright, smooth, in-focus
+  shots such as sky or walls give the cleanest fingerprint. All references
+  must be the same size and orientation as the test image.
+- Use the least-processed originals available: no resizing, no editing, and
+  the highest JPEG quality.
+- Smartphones with multi-frame or HDR pipelines, digital stabilisation or
+  lens-distortion correction may not match at all.
 
 ## Limitations
 
-### ⚠️ Important Caveats
+- No geometric search: rotated, scaled, digitally zoomed or re-cropped images
+  cannot be matched.
+- Strong JPEG compression, denoising and resizing weaken or remove the
+  fingerprint. A non-match is not evidence of a different camera.
+- Cameras of the same model can share weak non-unique artifacts.
+  ZeroMeanTotal and WienerInDFT reduce this but do not remove it.
+- The local test has a resolution of about 128 px. Smaller pasted objects are
+  missed, and dark, saturated, flat or very textured areas are untestable.
+  With a realistic sensor (σ ≈ 0.006) it misses even 512 px splices; it is
+  only useful with strong fingerprints and light compression, and gave false
+  regions on 8 % of clean hold-out shots.
+- A flagged region means the fingerprint is missing there. It does not say
+  why: a splice, heavy local retouching or inpainting all look the same.
 
-1. **Reference Database Required**
+## References
 
-   - Need known PRNU fingerprints for comparison
-   - Not all cameras have profiles available
-   - Custom or rare cameras may not have baseline
-
-2. **Image Processing Reduces PRNU**
-
-   - Heavy compression diminishes fingerprint
-   - Resizing or rotation can degrade pattern
-   - Multiple JPEG saves progressively weaken PRNU
-
-3. **Sensor Degradation**
-
-   - PRNU changes slightly over time
-   - Old camera fingerprints may not match recent photos
-
-4. **Similar Cameras**
-
-   - Cameras from same manufacturer/batch show similar PRNU
-   - May not always distinguish between models
-
-5. **Edited Images**
-
-   - Content-aware fill generates new pixels
-   - Added pixels won't have consistent PRNU
-
-6. **Social Media Recompression**
-
-   - Platforms recompress heavily
-   - Severely damages PRNU signal
-
-7. **Thermal Effects**
-   - Sensor temperature affects PRNU slightly
-   - Same camera under different conditions shows variation
-
-## Best Practices
-
-✔️ **Use primary reference images** from known camera source  
-✔️ **Compare multiple photos** from same camera (builds stronger profile)  
-✔️ **Account for compression** (lossless formats preserve PRNU best)  
-✔️ **Check for consistency** across image regions  
-✔️ **Combine with metadata** analysis for full picture  
-✔️ **Build camera fingerprint database** for your organization  
-✔️ **Use with other techniques** (especially ELA)  
-✔️ **Consider the context** (is camera match logical for claimed source?)
-
-## Key Questions to Ask
-
-1. Does the PRNU signature match the claimed camera?
-2. Are there multiple PRNU patterns in one image?
-3. Is the correlation score high enough to be conclusive?
-4. Do regions show consistent fingerprinting?
-5. Could compression or editing explain low PRNU correlation?
-6. Does the camera match make sense for the photo's origin?
-
-## Practical Considerations
-
-### PRNU Correlation Scales:
-
-- **> 0.015**: Very strong match, highly reliable
-- **0.010 - 0.015**: Strong match, good confidence
-- **0.005 - 0.010**: Weak match, suggestive only
-- **< 0.005**: Essentially no match
-
-### Image Quality for PRNU:
-
-- **Best**: RAW files, 10+ megapixels, minimal processing
-- **Good**: JPEG from camera at original resolution
-- **Poor**: Screenshots, heavily compressed, resized
-- **Worst**: Multiple JPEG saves, extreme compression
-
----
-
-_PRNU analysis is the gold standard for camera identification – like matching a bullet to a specific gun through ballistic striations. Each camera sensor has a unique fingerprint that persists across photos, making PRNU one of the most reliable techniques for source authentication._
+- J. Lukáš, J. Fridrich, M. Goljan, "Digital camera identification from
+  sensor pattern noise", IEEE TIFS 1(2), 2006.
+- M. Chen, J. Fridrich, M. Goljan, J. Lukáš, "Determining image origin and
+  integrity using sensor noise", IEEE TIFS 3(1), 2008.
+- M. Goljan, J. Fridrich, T. Filler, "Large scale test of sensor fingerprint
+  camera identification", Proc. SPIE 7254, 2009.
+- G. Chierchia, G. Poggi, C. Sansone, L. Verdoliva, "A Bayesian-MRF approach
+  for PRNU-based image forgery detection", IEEE TIFS 9(4), 2014.

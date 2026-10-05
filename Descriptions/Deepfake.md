@@ -1,330 +1,123 @@
-# 😁 Deepfake Detection
-
-## What is Deepfake Detection?
-
-Deepfakes are **fake videos or images created by AI** to make it look like someone said or did something they didn't. Deepfake detection looks for telltale signs that AI was used to create or manipulate facial features.
-
-Think of it like:
-
-- **Lie detector test** that catches inconsistencies in faces
-- **Forensic anthropology** examining whether facial features are biologically consistent
-- **Material scientist** checking if all ingredients are real
-- **Art authenticator** spotting AI-generated brushstrokes
-
-## What Does Deepfake Detection Measure?
-
-- **Facial consistency** (features match anatomically)
-- **Eye movement patterns** (blinking frequency, natural motion)
-- **Skin texture** (natural vs. AI-generated smoothness)
-- **Light reflection** (eyes, skin reflections consistent)
-- **Micro-expressions** (subtle facial movements)
-- **Temporal consistency** (faces don't flicker between frames)
-- **Artifact patterns** (common in AI generation)
-
-## How to Interpret Results
-
-### ✅ Normal Patterns (Likely Authentic)
-
-1. **High Authenticity Score** (75+)
-
-   - Consistent facial features
-   - Natural eye reflections
-   - Biological consistency
-
-2. **Natural Blinking Patterns**
-
-   - Random blinking intervals
-   - Both eyes close simultaneously
-   - Natural blink rate (15-20 per minute)
-
-3. **Consistent Lighting**
-
-   - Light reflections in both eyes match
-   - Shadows consistent with light source
-   - Skin highlights proportional
-
-4. **Biological Feasibility**
-   - Features follow natural human proportions
-   - Facial movements anatomically possible
-   - Smooth transitions between expressions
-
-### ⚠️ Suspicious Patterns (Possible Deepfake)
-
-1. **Low Authenticity Score** (<50)
-
-   - Multiple red flags across analysis
-   - **Verdict**: "Suspected AI-generated content"
-
-2. **Unnatural Eye Behavior**
-
-   - Asymmetric blinking (one eye blinks, other doesn't)
-   - Unnatural blink rate (too fast, too slow)
-   - **Warning**: "Abnormal eye movement detected"
-   - Iris or pupil anomalies
-
-3. **Inconsistent Light Reflection**
-
-   - Eye reflections don't match light source
-   - Different brightness in left vs. right eye
-   - **Warning**: "Inconsistent light reflections"
-   - Reflection positions physically impossible
-
-4. **Unnatural Skin/Texture**
-
-   - AI-generated smoothness (plastic appearance)
-   - **Warning**: "Unnaturally smooth skin texture"
-   - Missing natural skin details (pores, texture)
-   - Inconsistent texture between face regions
-
-5. **Facial Feature Anomalies**
-
-   - Asymmetric or impossible proportions
-   - **Warning**: "Suspicious facial proportions detected"
-   - Features don't follow biological norms
-   - Mismatch between face parts
-
-6. **Temporal Inconsistencies** (Video)
-
-   - Face flickers or twitches unnaturally
-   - Expressions don't transition smoothly
-   - **Warning**: "Unnatural facial movement patterns"
-   - Micro-expression artifacts
-
-7. **Boundary/Edge Artifacts**
-   - Face edges look blurry or unnatural
-   - **Warning**: "Face blending artifacts detected"
-   - Hair doesn't naturally integrate with face
-   - Skin tone discontinuities at boundaries
-
-## Common Artifacts Detected
-
-### 1. **First-Generation Deepfakes**
-
-Easiest to detect:
-
-- Over-smoothed skin (plastic look)
-- Unnatural eye reflections
-- Slight facial jitter
-- Visible boundary blending
-- **Detection confidence: 85-95%**
-
-### 2. **Mid-Generation Deepfakes**
-
-More sophisticated:
-
-- Better skin texture
-- More natural eye reflections
-- Smoother transitions
-- Better boundary blending
-- **Detection confidence: 65-80%**
-
-### 3. **State-of-the-Art Deepfakes**
-
-Hardest to detect:
-
-- Excellent texture matching
-- Nearly perfect reflections
-- Smooth expressions
-- Minimal artifacts
-- **Detection confidence: 45-65%**
-- (Other techniques like frequency analysis needed)
-
-### 4. **Common AI Artifacts**
-
-**Face Warping**:
-
-- One side of face different from other
-- Asymmetric distortions
-- Impossible proportions
-
-**Reflection Issues**:
-
-- Eye reflections don't match
-- Multiple/missing reflections
-- Reflections in wrong eyes
-
-**Eye Anomalies**:
-
-- Iris/pupil too perfect
-- Unnatural eye color transitions
-- Missing eye white details
-
-**Skin Problems**:
-
-- Uniform texture (too perfect)
-- Missing pores and details
-- Unnatural smoothness
-- Color blotches
-
-**Temporal Artifacts** (Video):
-
-- Flickering
-- Unnatural micro-expressions
-- Discontinuous motion
-- Texture streaming
-
-## Deepfake Types & Detection
-
-### Type 1: Full Face Generation
-
-**What it is**: Completely AI-generated face (no real person)
-**Detection difficulty**: Medium
-**Artifacts**: Often perfect symmetry, unnatural uniformity
-**Typical score**: 30-60
-
-### Type 2: Face Swap
-
-**What it is**: One person's face swapped onto another's body
-**Detection difficulty**: Hard (requires consistency checking)
-**Artifacts**: Lighting mismatch, boundary artifacts, texture transitions
-**Typical score**: 40-70
-
-### Type 3: Facial Attribute Editing
-
-**What it is**: Real face with modified features (age, expression, emotion)
-**Detection difficulty**: Hardest (most changes are subtle)
-**Artifacts**: Subtle texture changes, localized inconsistencies
-**Typical score**: 60-80
-
-### Type 4: Expression Reenactment
-
-**What it is**: Real person's face, fake expressions (saying things they didn't)
-**Detection difficulty**: Very hard
-**Artifacts**: Micro-expression glitches, unnatural eye movement
-**Typical score**: 70-85
-
-## Example Interpretations
-
-### Case 1: Obvious AI Face
-
-```
-Score: 25 (Very Low)
-Findings:
-  ⚠ Unnaturally smooth skin
-  ⚠ Impossible facial proportions
-  ⚠ Unnatural eye symmetry
-Warnings:
-  - Skin texture indicates AI generation
-  - Face proportions violate human norms
-Verdict: "Very likely AI-generated face"
-```
-
-### Case 2: Potential Face Swap
-
-```
-Score: 55 (Low-Medium)
-Findings:
-  ⚠ Inconsistent light reflections
-  ✓ Natural skin texture in most regions
-  ⚠ Unnatural boundary blending
-Warnings:
-  - Eye reflections suggest composite
-  - Face edge artifacts detected
-Verdict: "Possible face swap, needs manual review"
-```
-
-### Case 3: Likely Authentic
-
-```
-Score: 82 (High)
-Findings:
-  ✓ Natural skin texture with visible pores
-  ✓ Consistent light reflections
-  ✓ Anatomically normal proportions
-  ✓ Natural eye movement patterns
-Warnings: None
-Verdict: "Consistent with authentic image"
-```
-
-## Video-Specific Indicators
-
-When analyzing video (not just images):
-
-**Red Flags:**
-
-- Unnatural blinking pattern
-- Flickering face quality
-- Discontinuous expressions
-- Inconsistent head tracking
-- Jerky eye movements
-
-**Good Signs:**
-
-- Natural blink rate (15-20/min)
-- Stable face quality
-- Smooth expression transitions
-- Consistent head position
-- Natural eye following
+# Synthetic-Image Traces (Experimental)
+
+> **This tab cannot tell you whether an image is AI-generated.** There is no
+> trained detector and no verdict, only a spectral measurement. Modern
+> diffusion models, resizing and JPEG remove these traces, so a low reading
+> says nothing about how an image was made. A high reading has many ordinary
+> causes.
+
+## Idea
+
+Many image generators build the picture by repeated upsampling with
+(transposed) convolutions. That can leave a faint periodic pattern in the
+high-frequency noise residual, which shows up as:
+
+- sharp **peaks in the residual power spectrum**;
+- a periodic **autocorrelation** of the residual;
+- an unusual **high-frequency end of the azimuthally averaged spectrum**.
+
+These signs were described by Corvi et al. (ICASSP 2023) for GAN and
+diffusion images, and by Durall et al. (CVPR 2020) for up-convolution
+spectra. Detectors in those papers are *trained* on these patterns. This
+module only measures them.
+
+## What the code does
+
+1. Loads the image as greyscale. Images larger than 1024 px are
+   **centre-cropped**, never resized, because resampling creates and
+   destroys exactly these peaks. Images under 256 px, or flat images, return
+   `insufficient_data`.
+2. Computes the noise residual with the PRNU module's wavelet NoiseExtract
+   (db4, 4 levels).
+3. Estimates the power spectrum by Welch averaging: 128×128 Hann-windowed
+   tiles at stride 64, `|FFT|²` averaged over tiles.
+4. **Peak strength**: for each frequency, the log power minus the 9×9 local
+   median of the log power, in dB. The maximum is taken after excluding
+   these bins:
+   - DC and the two frequency axes (within ±1 bin);
+   - the **Nyquist rows and columns** (within ±1 bin of ±0.5 cycles/px).
+     Bayer demosaicing leaves energy there in ordinary camera images: before
+     this exclusion, 4 of 15 clean demosaiced PNGs gave a notice (up to
+     18 dB at (−0.5, 0.445)). The largest value there is reported as the
+     "Nyquist-line peak" (info only);
+   - multiples of 1/8 cycle/px (±1 bin), when the file is JPEG or shows a
+     JPEG block grid (`util.jpeg_grid_offset` strength > 1.15). Those peaks
+     come from 8×8 DCT blocks. They are reported separately as the
+     "8-px-grid peak" and not treated as generation traces.
+5. **Azimuthal average** of the image's log power spectrum (Durall). The
+   code reports mean power at 0.9–1.0 of Nyquist minus power at 0.4–0.5
+   (dB), as an informational number.
+
+## Reading the output
+
+| Output | Meaning |
+|---|---|
+| Off-grid residual peak (dB) | Strongest isolated periodic component of the residual. Above **9 dB** gives a *notice*; otherwise *info*. |
+| Peak frequency / period | Where that peak is. Period 3 suggests ×1.5 or ×3 resampling or upsampling. |
+| Nyquist-line peak (dB, demosaicing/CFA) | Strongest peak on the ±0.5 cycles/px rows/columns. Demosaicing, stride-2 transposed convolution (2-px checkerboard) and 2× upsampling all land here and cannot be told apart, so it is info only (a finding appears above 9 dB). |
+| 8-px-grid peak (dB) | Peak at k/8 cycles/px. On JPEG files this is compression, and it grows as quality drops. |
+| Azimuthal 0.9–1.0 vs 0.4–0.5 Nyquist (dB) | High-frequency roll-off. Very negative after JPEG, blur or downscaling. No threshold is applied. |
+| Tiles averaged | More tiles give a steadier spectrum. |
+
+Images:
+
+- the residual spectrum (dB above local median), with the peak marked;
+- the residual autocorrelation (±16 px, zero lag hidden);
+- the azimuthal-average plot.
+
+Findings are only ever *info* or *notice*, never *warning* and never a
+verdict.
+
+## Calibration and hold-out
+
+Threshold 9 dB (chosen on the original 107 in-repo negatives: skimage photos
+and the bundled sample as PNG, JPEG q20–100 and 0.5× downscale; max 8.5 dB).
+
+Hold-out negatives built with a camera simulator: scene → Bayer RGGB raw
+(with PRNU) → shot + read noise → OpenCV bilinear demosaic → half of them
+mildly sharpened (unsharp mask 0.6, σ 1) → PNG and JPEG q75/85/92, 1024 px.
+
+| Set | Negatives | Max peak | Above 9 dB |
+|---|---|---|---|
+| Simulator set A (calibration scenes) | 80 | 5.1 dB | 0/80 |
+| Simulator set B (other scenes, other seeds) + the reviewer's 30 demosaiced PNG/JPEG files | 110 | 10.7 dB | **1/110 (0.9 %)** |
+
+Positives on the same simulator images (set B): a period-3 pattern (±1.5
+grey) added before saving is found in 20/20 PNG and 20/20 JPEG q92 cases.
+
+What is no longer detectable by design: the 2×2 checkerboard (Nyquist)
+pattern. It now shows only in the Nyquist-line number, because ordinary
+demosaicing produces the same peak.
+
+`tests/test_deepfake_detector.py` re-checks: FPR ≤ 5 % on PNG/q50/q75/q95
+in-repo negatives; demosaiced camera PNGs stay below 9 dB; a checkerboard is
+reported on the Nyquist lines and never as the main peak; ≥ 90 % detection
+of the period-3 pattern.
+
+These are **synthetic artifacts**, not real generator outputs. No claim is
+made about detection rates on real GAN or diffusion images.
 
 ## Limitations
 
-### ⚠️ Important Caveats
+- Cannot reliably identify AI-generated images. A trained, up-to-date
+  detector plus provenance data (C2PA Content Credentials, see the Metadata tab)
+  are the appropriate tools.
+- Modern diffusion models, post-resizing, cropping plus rescaling and JPEG
+  compression remove or mask periodic traces. **Absence of peaks says
+  nothing.**
+- Peaks also come from resampling, demosaicing, sharpening, screen or print
+  re-capture, halftoning and periodic scene texture such as fabric, brick,
+  grids or microscopy.
+- On JPEG files, generator peaks at multiples of 1/8 cycle/px cannot be
+  separated from compression.
+- Period-2 patterns (2× upsampling, stride-2 checkerboards) sit on the
+  Nyquist lines with demosaicing and are not evaluated.
 
-1. **Technology Evolution**
+## References
 
-   - Deepfake technology improves constantly
-   - Detection methods lag behind generation
-   - Very new deepfakes may pass detection
-
-2. **Detection Accuracy**
-
-   - Not foolproof, especially for sophisticated forgeries
-   - May have false positives (real image flagged as fake)
-   - May have false negatives (deepfake passes as real)
-
-3. **Image Quality Dependent**
-
-   - Low-resolution images harder to analyze
-   - Compression artifacts interfere with detection
-   - Screenshot images lose detail
-
-4. **Style Variation**
-
-   - Different makeup, lighting, expressions complicate analysis
-   - Unusual facial features don't necessarily mean fake
-   - Diverse ethnicities have varied anatomies
-
-5. **Artistic Modifications**
-
-   - Heavy makeup can look artificial
-   - Filtered images fail some tests
-   - Professional makeup/photo editing may score suspicious
-
-6. **Individual Variation**
-
-   - Some people naturally have:
-     - Asymmetric faces
-     - Unusual eye shapes
-     - Unique proportions
-   - These don't always indicate deepfakes
-
-7. **Hybrid Attacks**
-   - Combined with other forgery techniques
-   - Deepfake + face swap = harder detection
-   - Multiple processing layers degrade detection
-
-## Best Practices
-
-✔️ **Use as screening tool**, not definitive verdict  
-✔️ **Look at context** (does claim make sense?)  
-✔️ **Cross-reference with metadata** and source analysis  
-✔️ **Examine original source** if available  
-✔️ **Consider detection confidence** (65%+ more reliable)  
-✔️ **Watch for common artifacts** listed above  
-✔️ **Use other techniques** (frequency analysis, noise) together  
-✔️ **Manual review for suspicious scores** (40-70 range)  
-✔️ **Account for individual variation** in human appearance
-
-## Key Questions to Ask
-
-1. Is the score above 75 (likely authentic)?
-2. Are findings mostly ✓ (normal) or ⚠ (suspicious)?
-3. Are warnings about known deepfake artifacts?
-4. Does the face show anatomically normal proportions?
-5. Are lighting and reflections consistent?
-6. Could image filters or makeup explain suspicious patterns?
-7. Does the overall context make sense?
-
----
-
-_Deepfake detection is an arms race between generation and detection technology. While no detection method is perfect, analyzing multiple indicators (eyes, skin, proportions, reflections) provides strong evidence. Always combine with other forensic techniques and contextual analysis._
+- R. Corvi, D. Cozzolino, G. Zingarini, G. Poggi, K. Nagano, L. Verdoliva,
+  "On the detection of synthetic images generated by diffusion models",
+  ICASSP 2023.
+- R. Durall, M. Keuper, J. Keuper, "Watch your up-convolution: CNN based
+  generative deep neural networks are failing to reproduce spectral
+  distributions", CVPR 2020.

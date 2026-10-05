@@ -1,164 +1,130 @@
-from analysis import ela
+"""ELA: behaviour of analyze_ela and a small seeded splice benchmark."""
+import io
+import shutil
+import tempfile
 import unittest
-import os
 from pathlib import Path
-from PIL import Image
-import sys
 
-# Add parent directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+import numpy as np
+import skimage.data as skd
+from PIL import Image
+
+from analysis.ela import analyze_ela
+
+SAMPLE = Path(__file__).resolve().parent.parent / "assets" / "sample images" / "sampleImg.jpeg"
+
+
+def _jpeg(arr, q):
+    b = io.BytesIO()
+    Image.fromarray(arr).save(b, "JPEG", quality=q)
+    return np.asarray(Image.open(io.BytesIO(b.getvalue())).convert("RGB"))
+
+
+def _photos():
+    out = [np.asarray(Image.open(SAMPLE).convert("RGB"))]
+    out += [getattr(skd, n)() for n in ("astronaut", "coffee", "chelsea", "rocket")]
+    out += [np.stack([getattr(skd, n)()] * 3, -1)
+            for n in ("camera", "moon", "brick", "coins", "clock")]
+    return out
 
 
 class TestELA(unittest.TestCase):
-    """Unit tests for Error Level Analysis module"""
-
     @classmethod
     def setUpClass(cls):
-        """Create test images"""
-        cls.test_dir = Path(__file__).parent / "test_images"
-        cls.test_dir.mkdir(exist_ok=True)
-
-        # Textured content, not a flat fill: a flat image compresses perfectly
-        # and yields exactly 0 error at every quality, which makes the
-        # quality-comparison assertions vacuous.
-        cls.test_image = cls.test_dir / "test.jpg"
-        sample = (Path(__file__).parent.parent /
-                  "assets" / "sample images" / "sampleImg.jpeg")
-        img = Image.open(sample).convert('RGB').resize((100, 100))
-        img.save(cls.test_image, 'JPEG', quality=95)
+        cls.tmp = Path(tempfile.mkdtemp())
+        cls.photos = _photos()
 
     @classmethod
     def tearDownClass(cls):
-        """Clean up test images"""
-        if cls.test_image.exists():
-            cls.test_image.unlink()
-        if cls.test_dir.exists() and not any(cls.test_dir.iterdir()):
-            cls.test_dir.rmdir()
+        shutil.rmtree(cls.tmp, ignore_errors=True)
 
-    def test_perform_ela_basic(self):
-        """Test basic ELA functionality"""
-        result = ela.perform_ela(str(self.test_image))
+    def _save(self, name, arr, **kw):
+        p = self.tmp / name
+        Image.fromarray(arr).save(p, **kw)
+        return str(p)
 
-        self.assertIsNotNone(result)
-        self.assertIsInstance(result, tuple)
-        self.assertEqual(len(result), 3)  # ela_img, overlay, metrics
+    def test_quality_is_reflected_in_labels_and_error(self):
+        r90 = analyze_ela(str(SAMPLE), quality=90)
+        r70 = analyze_ela(str(SAMPLE), quality=70)
+        self.assertEqual(r90["status"], "ok")
+        self.assertTrue(any("q90" in k for k in r90["metrics"]))
+        self.assertTrue(any("q70" in k for k in r70["metrics"]))
+        self.assertFalse(any("q90" in k for k in r70["metrics"]))
+        self.assertGreater(r70["details"]["mean_error"], r90["details"]["mean_error"])
 
-        ela_img, overlay, metrics = result
-        self.assertIsNotNone(ela_img)
-        self.assertIsNotNone(overlay)
-        self.assertIsInstance(metrics, dict)
+    def test_percentage_matches_the_overlay(self):
+        """The reported % and the red overlay come from the same mask."""
+        r = analyze_ela(str(SAMPLE))
+        pct = next(v for k, v in r["metrics"].items() if k.startswith("Area above"))
+        overlay = next(v for k, v in r["images"].items() if "red" in k)
+        rgb = np.asarray(Image.open(SAMPLE).convert("RGB")).astype(int)
+        changed = (np.abs(overlay.astype(int) - rgb).sum(axis=2) > 3).mean() * 100
+        self.assertAlmostEqual(pct, changed, delta=0.5)
+        self.assertAlmostEqual(pct, r["details"]["area_above_k_pct"], delta=0.01)
 
-    def test_ela_with_quality_parameter(self):
-        """Test ELA with different quality settings"""
-        result_q90 = ela.perform_ela(str(self.test_image), quality=90)
-        result_q70 = ela.perform_ela(str(self.test_image), quality=70)
+    def test_images_are_arrays_not_ssim(self):
+        r = analyze_ela(str(SAMPLE))
+        self.assertLessEqual(len(r["images"]), 4)
+        for cap, im in r["images"].items():
+            self.assertNotIn("SSIM", cap)
+            self.assertEqual(im.dtype, np.uint8)
+            self.assertLessEqual(max(im.shape[:2]), 1200)
 
-        _, _, metrics_q90 = result_q90
-        _, _, metrics_q70 = result_q70
+    def test_degenerate_inputs(self):
+        flat = self._save("flat.png", np.full((200, 200, 3), 90, np.uint8))
+        tiny = self._save("tiny.png", np.zeros((10, 10, 3), np.uint8))
+        self.assertEqual(analyze_ela(flat)["status"], "insufficient_data")
+        self.assertEqual(analyze_ela(tiny)["status"], "insufficient_data")
+        self.assertEqual(analyze_ela(str(self.tmp / "missing.jpg"))["status"], "error")
 
-        # Lower quality should produce higher errors
-        self.assertGreater(
-            metrics_q70.get('mean_error', 0),
-            metrics_q90.get('mean_error', 0)
-        )
+    def test_png_gets_an_info_note(self):
+        p = self._save("p.png", self.photos[1])
+        r = analyze_ela(p)
+        self.assertTrue(any("not JPEG" in f["text"] for f in r["findings"]))
 
-    def test_ela_metrics(self):
-        """Test ELA metrics are present"""
-        _, _, metrics = ela.perform_ela(str(self.test_image))
+    def test_bundled_sample_ufo_is_marked(self):
+        """The bundled sample has a pasted disc ("UFO") above the city."""
+        r = analyze_ela(str(SAMPLE))
+        self.assertGreater(r["details"]["n_regions"], 0)
+        mask = next(v for k, v in r["images"].items() if "red" in k)
+        rgb = np.asarray(Image.open(SAMPLE).convert("RGB")).astype(int)
+        red = (np.abs(mask.astype(int) - rgb).sum(axis=2) > 3)
+        self.assertGreater(red[240:300, 480:840].mean(), 0.5)  # the disc
 
-        required_keys = ['mean_error', 'max_error', 'std_error',
-                         'anomaly_score', 'suspicious_areas_percent']
-        for key in required_keys:
-            self.assertIn(key, metrics)
-            self.assertIsInstance(metrics[key], (int, float))
+    def test_smooth_photo_with_texture_is_not_flagged(self):
+        """Reviewer's false-alarm case: large smooth area next to texture
+        (old 4x-median rule fired on such photos)."""
+        rng = np.random.default_rng(3)
+        fp = 0
+        for i, img in enumerate(self.photos[1:6]):
+            a = np.clip(img.astype(float) + rng.normal(0, 1.5, img.shape), 0, 255).astype(np.uint8)
+            for q in (75, 92):
+                fp += bool(analyze_ela(self._save(f"sm{i}_{q}.jpg", a, quality=q))["details"]["n_regions"])
+        self.assertEqual(fp, 0)
 
-        self.assertGreaterEqual(metrics['suspicious_areas_percent'], 0.0)
-        self.assertLessEqual(metrics['suspicious_areas_percent'], 100.0)
-
-    def test_ela_with_invalid_path(self):
-        """Test ELA with non-existent file"""
-        result = ela.perform_ela("nonexistent.jpg")
-
-        # Should return error dict or raise exception
-        if isinstance(result, dict):
-            self.assertIn('error', result)
-
-    def test_ela_error_scale(self):
-        """Test error scale parameter"""
-        result1 = ela.perform_ela(str(self.test_image), error_scale=5)
-        result2 = ela.perform_ela(str(self.test_image), error_scale=15)
-
-        self.assertIsNotNone(result1)
-        self.assertIsNotNone(result2)
-
-    def test_ela_image_output(self):
-        """Test that ELA produces valid PIL images"""
-        ela_img, overlay, _ = ela.perform_ela(str(self.test_image))
-
-        self.assertIsInstance(ela_img, Image.Image)
-        self.assertIsInstance(overlay, Image.Image)
-        self.assertEqual(ela_img.size, (100, 100))
-
-    def test_multi_quality_ela(self):
-        """Test multi-quality ELA if implemented"""
-        if hasattr(ela, 'multi_quality_ela'):
-            results = ela.multi_quality_ela(
-                str(self.test_image),
-                qualities=[70, 85, 95]
-            )
-
-            self.assertIsInstance(results, dict)
-            self.assertEqual(len(results), 3)
-
-
-class TestELAEdgeCases(unittest.TestCase):
-    """Test edge cases for ELA"""
-
-    @classmethod
-    def setUpClass(cls):
-        cls.test_dir = Path(__file__).parent / "test_images"
-        cls.test_dir.mkdir(exist_ok=True)
-
-    def test_ela_with_png(self):
-        """Test ELA with PNG format"""
-        png_path = self.test_dir / "test.png"
-        img = Image.new('RGB', (50, 50), color=(255, 0, 0))
-        img.save(png_path, 'PNG')
-
-        result = ela.perform_ela(str(png_path))
-
-        if isinstance(result, tuple):
-            self.assertEqual(len(result), 3)
-
-        png_path.unlink()
-
-    def test_ela_with_small_image(self):
-        """Test ELA with very small image"""
-        small_path = self.test_dir / "small.jpg"
-        img = Image.new('RGB', (10, 10), color=(128, 128, 128))
-        img.save(small_path, 'JPEG')
-
-        result = ela.perform_ela(str(small_path))
-        self.assertIsNotNone(result)
-
-        small_path.unlink()
-
-    def test_ela_with_large_image(self):
-        """Test ELA with larger image"""
-        large_path = self.test_dir / "large.jpg"
-        img = Image.new('RGB', (1000, 1000), color=(128, 128, 128))
-        img.save(large_path, 'JPEG')
-
-        result = ela.perform_ela(str(large_path))
-        self.assertIsNotNone(result)
-
-        large_path.unlink()
-
-    @classmethod
-    def tearDownClass(cls):
-        if cls.test_dir.exists() and not any(cls.test_dir.iterdir()):
-            cls.test_dir.rmdir()
+    def test_splice_benchmark(self):
+        """Raw patch pasted into a q70-90 JPEG, saved losslessly, vs clean
+        JPEGs. Hold-out (Descriptions/ELA.md): PNG 14/21, FPR 0/84."""
+        rng = np.random.default_rng(7)
+        tp = fp = 0
+        photos = self.photos[1:]  # the sample itself contains a paste
+        n = len(photos)
+        for i, img in enumerate(photos):
+            q = int(rng.choice([70, 80, 90, 95]))
+            neg = self._save(f"neg{i}.jpg", img, quality=q)
+            fp += bool(analyze_ela(neg)["details"]["n_regions"])
+            donor = photos[(i + 3) % n]
+            h, w = img.shape[:2]
+            s = int(min(h, w) * 0.3)
+            y, x = rng.integers(0, h - s), rng.integers(0, w - s)
+            bg = _jpeg(img, int(rng.choice([70, 80, 90]))).copy()
+            bg[y:y + s, x:x + s] = donor[:s, :s]
+            r = analyze_ela(self._save(f"pos{i}.png", bg))
+            tp += bool(r["details"]["n_regions"])
+        print(f"ELA benchmark TPR {tp}/{n} FPR {fp}/{n}")
+        self.assertEqual(fp, 0, f"false alarms {fp}/{n}")
+        self.assertGreaterEqual(tp, n // 2, f"detections {tp}/{n}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

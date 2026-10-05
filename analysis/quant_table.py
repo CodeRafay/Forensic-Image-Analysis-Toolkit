@@ -1,95 +1,141 @@
+"""
+JPEG quantization-table analysis.
+
+Reads the DQT tables of the last JPEG encoder, estimates the IJG quality
+they correspond to, and says whether they are a scaled copy of the IJG
+(libjpeg) reference tables of ITU-T T.81 Annex K. That tells you which
+*encoder family* saved the file last; it says nothing about whether the pixels
+were edited. (Background: Farid, "Digital Image Ballistics from JPEG
+Quantization", Dartmouth TR2006-583; Kornblum, "Using JPEG quantization tables
+to identify imagery processed by software", DFRWS 2008.)
+
+estimate_jpeg_quality / is_standard_table are reused by double_jpeg and
+jpeg_ghost.
+"""
 import numpy as np
+from PIL import Image
+
+from analysis.util import error_result, make_result
+
+LIMITATIONS = [
+    "Tables describe only the last JPEG save. Earlier compressions, edits made "
+    "before that save, and lossless edits are invisible here (see Double JPEG "
+    "and JPEG Ghost).",
+    "IJG tables are used by a huge range of software and by some cameras; "
+    "custom tables are used by most camera vendors and by Photoshop. The "
+    "encoder hint narrows the family, it does not identify a device.",
+    "Quality is the IJG quality that produces these tables (exact for libjpeg "
+    "tables; when several qualities give the same table the highest is "
+    "reported). For non-IJG "
+    "tables it is only a rough equivalent.",
+    "No database of camera tables is consulted, so a camera claim in EXIF "
+    "cannot be confirmed or refuted from the tables alone.",
+]
+
+TABLE_NAMES = {0: "luminance", 1: "chrominance"}
 
 
 def analyze_quantization_table(image_path):
     """
-    Analyzes JPEG quantization tables for forensics.
-    Abnormal quantization tables can indicate image manipulation.
-
-    Args:
-        image_path (str): Path to the JPEG image
-
-    Returns:
-        dict: Quantization table analysis results
+    Returns the shared result contract (analysis.util.make_result):
+        metrics: "Table N estimated quality (IJG)", "Table N IJG-standard"
+        tables:  "Table N (<channel>)": 8 rows of {"0".."7": value}
+        details: {"quantization_tables": {id: [64 ints]}, "qualities": {id: q},
+                  "standard": {id: bool}, "exif": {...}, "encoder_family": str}
     """
     try:
-        from PIL import Image
-        img = Image.open(image_path)
+        with Image.open(image_path) as img:
+            fmt = img.format
+            exif = img.getexif() if fmt == "JPEG" else {}
+            exif = {k: str(exif.get(tag)).strip("\x00 ").strip()
+                    for k, tag in (("Make", 271), ("Model", 272), ("Software", 305))
+                    if exif.get(tag)}
+        if fmt != "JPEG":
+            return make_result(
+                "not_applicable",
+                f"{fmt or 'This'} file has no JPEG quantization tables.",
+                [("info", "Quantization tables exist only in JPEG files.")],
+                limitations=LIMITATIONS)
 
-        if img.format != 'JPEG':
-            return {
-                "status": "not_jpeg",
-                "error": "Not a JPEG image - quantization tables only exist in JPEG format",
-                "format": img.format
-            }
-
-        # Try to extract quantization tables from JPEG markers
         qtables = extract_jpeg_quantization_tables(image_path)
-
         if not qtables:
-            # Fallback: use PIL's quantization info if available
-            result = {
-                "status": "limited_info",
-                "format": "JPEG",
-                "image_size": img.size,
-                "note": "Quantization tables not directly accessible"
-            }
+            return make_result(
+                "insufficient_data", "No readable quantization tables found.",
+                [("notice", "The JPEG decoder exposed no 64-entry tables "
+                            "(unusual; the file may be damaged or non-baseline).")],
+                limitations=LIMITATIONS)
 
-            if hasattr(img, 'quantization'):
-                result["pil_quantization_info"] = str(img.quantization)
-                result["status"] = "partial"
+        findings, metrics, tables = [], {}, {}
+        qualities, standard = {}, {}
+        for tid, qt in sorted(qtables.items()):
+            arr = np.array(qt)
+            q = estimate_jpeg_quality(arr, tid)
+            std = is_standard_table(arr, tid)
+            qualities[tid], standard[tid] = q, std
+            name = TABLE_NAMES.get(tid, "chrominance")
+            metrics[f"Table {tid} estimated quality (IJG)"] = q
+            metrics[f"Table {tid} IJG-standard"] = "yes" if std else "no"
+            tables[f"Table {tid} ({name})"] = [
+                {str(c): int(v) for c, v in enumerate(row)}
+                for row in arr.reshape(8, 8)]
 
-            return result
+        all_ones = all(max(t) <= 1 for t in qtables.values())
+        if all_ones:
+            family = "unclassifiable"
+            findings.append((
+                "info", "All table entries are 1 (quality ≈ 100): every encoder "
+                        "family produces this, so the encoder cannot be classified."))
+        elif all(standard.values()):
+            family = "IJG"
+            findings.append((
+                "info", "Tables are scaled IJG/libjpeg reference tables — typical "
+                        "of software saves (PIL, OpenCV, GIMP, many web/AI "
+                        "pipelines); many cameras use vendor tables instead."))
+        else:
+            family = "custom"
+            odd = [t for t, s in standard.items() if not s]
+            findings.append((
+                "info", f"Table(s) {odd} are not scaled IJG tables (custom "
+                        "tables) — typical of a camera vendor encoder or an "
+                        "editor such as Photoshop."))
 
-        # Analyze extracted quantization tables
-        analysis = {
-            "status": "success",
-            "format": "JPEG",
-            "image_size": img.size,
-            "quantization_tables": {}
-        }
+        lum_q = qualities.get(0, min(qualities.values()))
+        findings.append(("info", f"Luminance table corresponds to IJG quality "
+                                 f"≈ {lum_q} (exact for libjpeg tables)."))
+        if lum_q < 50 and not all_ones:
+            findings.append(("info", "Strong compression (quality < 50): fine "
+                                     "detail and other pixel-level traces are "
+                                     "degraded."))
 
-        warnings = []
+        if exif:
+            desc = ", ".join(f"{k}: {v}" for k, v in exif.items())
+            text = f"EXIF {desc}."
+            if family == "IJG" and "Make" in exif:
+                text += (" A camera Make with IJG tables fits a later software "
+                         "re-save, or a camera whose firmware uses IJG tables.")
+            elif family == "custom" and "Software" in exif:
+                text += (" Custom tables with a Software tag fit that program's "
+                         "own encoder or an untouched camera file.")
+            findings.append(("info", text + " (EXIF is editable; context only.)"))
+        else:
+            findings.append(("info", "No EXIF Make/Model/Software to compare "
+                                     "the tables with."))
 
-        for table_id, qtable in qtables.items():
-            table_array = np.array(qtable)
-
-            # Estimate quality by inverting the IJG scaling. Table 0 is
-            # luminance, the rest chrominance — they use different standards.
-            quality_estimate = estimate_jpeg_quality(table_array, table_id)
-
-            # Analyze table characteristics
-            table_analysis = {
-                "table_values": qtable,
-                "min_value": int(np.min(table_array)),
-                "max_value": int(np.max(table_array)),
-                "mean_value": float(np.mean(table_array)),
-                "estimated_quality": quality_estimate,
-                "table_size": len(qtable)
-            }
-
-            # Check for anomalies
-            if quality_estimate < 50:
-                warnings.append(
-                    f"Table {table_id}: Low quality ({quality_estimate}) - high compression")
-
-            # Check for non-standard tables
-            if not is_standard_table(table_array, table_id):
-                warnings.append(
-                    f"Table {table_id}: Non-standard quantization table detected - possible editing software")
-
-            analysis["quantization_tables"][f"table_{table_id}"] = table_analysis
-
-        analysis["warnings"] = warnings
-        analysis["interpretation"] = "Standard tables = camera original; non-standard = editing software used"
-
-        return analysis
-
-    except Exception as e:
-        return {
-            "status": "error",
-            "error": str(e)
-        }
+        return make_result(
+            "ok",
+            f"Read {len(qtables)} quantization table(s); estimated luminance "
+            f"quality {lum_q}, encoder family: {family}.",
+            findings, metrics, tables=tables, limitations=LIMITATIONS,
+            details={
+                "quantization_tables": {str(t): [int(v) for v in qt]
+                                        for t, qt in qtables.items()},
+                "qualities": {str(t): int(q) for t, q in qualities.items()},
+                "standard": {str(t): bool(s) for t, s in standard.items()},
+                "exif": exif,
+                "encoder_family": family,
+            })
+    except Exception as e:  # noqa: BLE001 — contract: never raise
+        return error_result(e, LIMITATIONS)
 
 
 def extract_jpeg_quantization_tables(image_path):
@@ -103,25 +149,18 @@ def extract_jpeg_quantization_tables(image_path):
     bytes. Pillow returns each table de-zigzagged into raster order, which is
     the order `estimate_jpeg_quality` and `is_standard_table` expect.
 
-    Args:
-        image_path (str): Path to JPEG file
-
     Returns:
-        dict: Dictionary of quantization tables {table_id: [64 values]}
+        dict: {table_id: [64 values]} (empty if none / not a JPEG)
     """
     try:
-        from PIL import Image
-
         with Image.open(image_path) as img:
             tables = getattr(img, 'quantization', None) or {}
-            # array.array -> plain list, and drop anything malformed
             return {
                 int(table_id): list(values)
                 for table_id, values in tables.items()
                 if len(values) == 64
             }
-
-    except Exception:
+    except Exception:  # noqa: BLE001
         return {}
 
 
@@ -155,11 +194,24 @@ def _standard_table(table_id):
     return STANDARD_LUMINANCE if table_id == 0 else STANDARD_CHROMINANCE
 
 
+def ijg_table(quality, table_id=0):
+    """The table libjpeg builds for `quality` (1-100, baseline: clipped to
+    1..255), raster order, int array of 64."""
+    q = min(100, max(1, int(quality)))
+    scale = 5000 // q if q < 50 else 200 - 2 * q
+    return np.clip((_standard_table(table_id) * scale + 50) // 100, 1, 255)
+
+
+_IJG = {t: [ijg_table(q, t) for q in range(1, 101)] for t in (0, 1)}
+
+
 def estimate_jpeg_quality(qtable, table_id=0):
     """
     Estimates JPEG quality from a quantization table.
 
-    Inverts the IJG scaling that libjpeg applies when building a table:
+    An exact match with a libjpeg table for q = 1..100 returns that q (the
+    highest q when several produce the same table). Otherwise it inverts
+    the IJG scaling that libjpeg applies when building a table:
 
         scale = 5000/quality        if quality < 50
         scale = 200 - 2*quality     otherwise
@@ -179,6 +231,10 @@ def estimate_jpeg_quality(qtable, table_id=0):
     q = np.asarray(qtable, dtype=np.float64).ravel()
     if q.size != 64:
         return 50  # default
+    exact = [i + 1 for i, t in enumerate(_IJG[0 if table_id == 0 else 1])
+             if np.array_equal(t, q)]
+    if exact:
+        return exact[-1]
 
     standard = _standard_table(table_id).astype(np.float64)
 
@@ -202,11 +258,11 @@ def is_standard_table(qtable, table_id=0, tolerance=0.02):
     """
     Checks whether a table is a scaled version of the standard IJG table.
 
-    A camera or a standard encoder produces T50 scaled by a single factor, so
-    every entry divided by its standard counterpart gives the same ratio.
-    Editing software with custom tables breaks that proportionality. The
-    previous check only tested that values grow toward high frequencies, which
-    nearly every table does, so it flagged almost nothing.
+    An IJG-family encoder (libjpeg, PIL, OpenCV, GIMP) produces T50 scaled by
+    a single factor, so every entry divided by its standard counterpart gives
+    the same ratio. Encoders with custom tables (many camera vendors,
+    Photoshop) break that proportionality. A match says which encoder saved
+    the file last, not that the pixels are unedited.
 
     Args:
         qtable: 64-element quantization table (raster order)

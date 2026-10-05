@@ -1,304 +1,130 @@
-# 🔀 Resampling Detection
+# Resampling Detection
 
-> ## 📌 It Recovers The Scale Factor, Not Just A Yes/No
->
-> When resampling is detected, the tool reports **how much** the image was
-> rescaled. The periodicity sits at exactly `1 − 1/s` for a scale factor `s`,
-> which makes `s` recoverable:
->
-> | Actually resized by | Reported |
-> | ------------------- | -------- |
-> | 1.05× | 1.05× |
-> | 1.25× | 1.25× |
-> | 1.50× | 1.50× |
-> | 1.90× | 1.90× |
-> | never resized | not detected |
->
-> Two candidates are sometimes given (e.g. "1.5× or 3×"). That ambiguity is
-> real, not hedging: above 2× the signature folds back below the Nyquist limit,
-> so both readings fit the same measurement.
->
-> **Read a positive result as strong evidence and a negative as weak.** Two
-> cases are genuine blind spots, and the tool states them in its output:
->
-> - **Exact integer scaling** (2×, 3×) lands precisely on the Nyquist limit and
->   cannot be separated from it
-> - **Downscaling** discards samples rather than manufacturing correlated ones,
->   so it leaves little to detect
+Tests whether the pixels were produced by interpolation, i.e. the image (or
+a pasted part of it) was enlarged, shrunk or rotated after capture. A result
+is an **indicator, not proof**: resizing is routine (web publishing,
+thumbnails) and a detection says nothing about whether the content was
+altered.
 
-## What is Resampling Detection?
+## Method
 
-Resampling is when an image is **scaled up or down and then saved**. When you resize an image, interpolation algorithms create new pixels, leaving telltale patterns. Resampling detection finds these patterns to reveal image manipulation.
+M. Kirchner, *Fast and reliable resampling detection by spectral analysis of
+fixed linear predictor residue*, ACM MM&Sec 2008, with the JPEG-aware peak
+masking of M. Kirchner & T. Gloe, *On resampling detection in re-compressed
+images*, IEEE WIFS 2009.
 
-Think of it like:
+1. The image is decoded to grayscale at **full resolution** (never resized).
+2. Each pixel is predicted from its 8 neighbours by Kirchner's fixed filter
+   (0.5 x edge neighbours, -0.25 x corner neighbours); `e` is the residual.
+3. p-map `p = exp(-e^2 / 8)`: close to 1 where the pixel is a linear
+   combination of its neighbours. After interpolation this happens in a
+   pattern that repeats with the resampling period.
+4. The p-map (mean removed, Hann window; central 2048x2048 crop for very large
+   images) is Fourier-transformed. Each spectrum bin is divided by the
+   geometric mean of its 9x9 neighbourhood, so a periodic component shows up
+   as an isolated peak.
+5. **Statistic = the largest normalised peak** outside the low-frequency disc
+   (radius 0.06 cycles/px, image content), after a **narrow notch** at
+   lattice points (Kirchner & Gloe 2009): always at (0.5, 0), (0, 0.5),
+   (0.5, 0.5), because camera demosaicing has period 2 (without this, 7 of
+   16 clean demosaiced PNGs read as resized); and at every (k/8, l/8) when the
+   file is a JPEG or shows a measurable 8x8 grid (grid strength >= 1.4, the
+   threshold calibrated in frequency_analysis). Notch half-width: 2.5 bins,
+   at least 0.01 cycles/px (texture smears JPEG peaks by a few bins).
+6. **Derivative projection** (Gallagher 2005; the axis-aligned case of
+   Mahdian & Saic, IEEE TIFS 2008): mean |second derivative| of every column
+   (and every row), 1-D spectrum, contrast against the local log-spectrum,
+   same lattice notch (2.5 bins). Averaging a whole column keeps the
+   interpolation period after JPEG, where the 2-D p-map loses it. It sees
+   axis-aligned scaling only, not rotation.
+7. **Decision**: flagged if either the p-map peak >= 12 or the projection
+   peak >= 7.8 (each calibrated separately; combined false-alarm rate below).
+8. **Nearest-neighbour test**: share of adjacent pixel columns/rows that are
+   exact copies, counted only if the copies lie on a regular lattice.
+   Needed because a centre-aligned 2x enlargement is symmetric in both
+   phases and leaves no p-map periodicity.
+9. **Localisation**: the p-map statistic in 128x128 windows (stride 64;
+   doubled on very large images so there are at most 1500 windows).
 
-- **Document examiner** detecting when text was enlarged with a copy machine
-- **Handwriting expert** spotting when writing was scaled/stretched
-- **Print forensics** detecting offset printing press patterns
-- **Audio forensics** detecting when sound was pitch-shifted
+## Reading the output
 
-## What Does Resampling Detection Measure?
+| Metric | Meaning |
+| --- | --- |
+| Peak ratio (x local background) | Strongest 2-D p-map peak. >= 12 is a warning. |
+| Peak frequency (vertical, horizontal) | Where the peak is, in cycles/pixel. |
+| Projection peak ratio | Strongest 1-D derivative-projection peak. >= 7.8 is a warning. |
+| Projection peak frequency | Its frequency and axis (horizontal = column profile). |
+| Duplicated columns / rows (%) | Nearest-neighbour enlargement by s duplicates 100(1-1/s) %: 1.25x -> 20 %, 2x -> 50 %. |
+| Windows above threshold (%) | Share of 128x128 windows with window ratio >= 10. |
 
-- **Interpolation kernel** — nearest-neighbour is identified reliably; bilinear,
-  bicubic and Lanczos are reported as a family, since they are not reliably
-  separable from one another on a single image
-- **Scaling factors** (how much the image was enlarged/reduced)
-- **Resampling artifacts** (characteristic grid patterns)
-- **Frequency anomalies** (unusual periodic patterns)
-- **Directional artifacts** (horizontal vs. vertical patterns)
-- **Compression consistency** (uniform vs. localized resampling)
+**Scale factor.** An up-scaling by s peaks at f = 1 - 1/s (1.25x -> 0.200,
+1.5x -> 0.333). The spectrum is aliased, so the same peak also fits 1/f and
+1/(1+f) (down-scaling): all are listed. A uniform scaling peaks on both axes,
+and the strongest 2-D bin is often the diagonal (f, f); that is read as a
+uniform scale, not a rotation. A rotation by t peaks at radius 2 sin(t/2),
+slightly off-axis; such peaks get a rotation reading.
 
-## How to Interpret Results
+**Images**: the p-map spectrum (bright isolated dots = periodicity), a
+heatmap of the window statistic, and the image with windows above threshold
+in red. A pasted rescaled object shows as a red cluster while the rest of the
+image stays clean; the global test usually stays below threshold then, so
+the finding is a *notice*.
 
-### ✅ Normal Patterns (Likely Authentic)
+## Measured performance
 
-1. **No Resampling Detected**
+Thresholds were chosen on calibration set A and then measured, unchanged, on
+a different hold-out set B and on the reviewer's independent set.
 
-   - Image at original resolution
-   - No interpolation artifacts
-   - **Score**: 85-100 (Original resolution)
+- **A** (calibration): 8 photos (sample, coffee, chelsea, rocket, brick,
+  page, grass, gravel) + 10 camera-pipeline scenes (synthetic scene, Bayer
+  RGGB mosaic, shot + read noise, OpenCV bilinear demosaic, half sharpened).
+  Negatives: PNG, JPEG q75/85/92/95, crop of a q80 JPEG re-saved at q90
+  (108). Highest p-map 11.49 (brick q85), highest projection 7.68 (page).
+- **B** (hold-out): 7 other skimage images + 10 other camera seeds, same
+  cases (102 negatives); positives on the 10 camera hosts.
 
-2. **Uniform Scaling**
+**False alarms**: A 0/108, B 1/102 (`hubble_deep_field` PNG, p-map 26.8;
+that image is probably resampled at source), reviewer set 0/64 (16
+demosaiced hosts, PNG and JPEG q75/90/95), no flagged windows on the
+reviewer negatives.
 
-   - If resampled, entire image shows consistent pattern
-   - Scaling factor detectable and reasonable
-   - No suspicious regions
+**Detection, hold-out B (of 10)** and **reviewer set (of 16)**:
 
-3. **Natural Interpolation**
-   - Bilinear or bicubic interpolation used
-   - Professional quality resampling
-   - Artifacts minimal and uniform
+| Condition | B: PNG / q95 / q90 / q80 | Reviewer: PNG / q95 / q90 / q80 |
+| --- | --- | --- |
+| up 1.1x bicubic | 10 / 10 / 10 / 9 | 14 / 9 / 6 / 0 |
+| up 1.25x bicubic | 10 / 10 / 10 / 10 | - |
+| up 1.3x bilinear | 10 / 10 / 10 / 9 | 16 / 12 / 8 / 1 |
+| up 1.7x bicubic | 10 / 10 / 10 / 10 | 16 / 14 / 11 / 9 |
+| down 0.8x bicubic | 10 / 0 / 0 / 0 | 14 / 0 / 0 / 0 |
+| rotation 7 deg bilinear | 10 / 8 / 0 / 0 | 13 / 0 / 0 / 0 |
+| rotation 7 deg bicubic | 9 / 8 / 1 / 0 | 13 / 0 / 0 / 0 |
 
-### ⚠️ Suspicious Patterns (Possible Manipulation)
+After JPEG almost all enlargement detections come from the projection test
+(e.g. B 1.1x q80: p-map 0/10, projection 9/10). The two sets differ in
+difficulty (the reviewer hosts are smaller and smoother); expect the lower
+numbers on real photos.
 
-1. **Undetectable Scaling Factor**
+Run time at 12 MP (4000x3000 JPEG): about 20 s, 490 MB peak (tracemalloc).
 
-   - Cannot determine original resolution
-   - Suggests complex processing
-   - **Warning**: "Unclear scaling history"
-
-2. **Inconsistent Resampling**
-
-   - Different regions show different scaling
-   - Some areas upscaled, others downscaled
-   - **Warning**: "Region-specific scaling detected"
-
-3. **Suspicious Scaling Ratio**
-
-   - Impossible scaling factor for claimed image
-   - **Example**: Claimed 24MP image shows 8MP scaling
-   - **Warning**: "Incompatible with claimed source"
-
-4. **Multiple Resampling Passes**
-
-   - Multiple scaling operations detected
-   - Cumulative quality degradation
-   - **Warning**: "Multiple resampling cycles detected"
-
-5. **Localized Artifacts**
-   - Only certain regions show resampling
-   - Others appear original resolution
-   - **Warning**: "Possible insertion of rescaled content"
-
-## How Resampling Happens
-
-### Normal Scenario (Single Original):
-
-```
-Camera captures: 4000×3000 pixels
-Saved as JPEG: 4000×3000 pixels (original)
-Analysis: No resampling patterns detected
-```
-
-### Suspicious Scenario (Manipulation):
-
-```
-Original image: 4000×3000 pixels
-Extracted object: 500×400 pixels
-Scaled up: 1000×800 pixels (interpolated)
-Inserted into new image
-Analysis: Resampling patterns detected in object region
-```
-
-## Common Artifacts Detected
-
-### 1. **Nearest Neighbor Interpolation**
-
-Easiest to detect:
-
-- Blocky patterns
-- Visible "stair-stepping" at edges
-- Regular grid artifacts
-- Often used for quick/careless edits
-- **Suspicion level: Very High**
-
-### 2. **Bilinear Interpolation**
-
-Medium difficulty:
-
-- Smoother than nearest neighbor
-- Characteristic diagonal artifacts
-- Professional editing tools often use this
-- **Suspicion level: Medium**
-
-### 3. **Bicubic Interpolation**
-
-Hardest to detect:
-
-- Very smooth scaling
-- Minimal artifacts
-- Professional quality
-- Used by Photoshop and similar tools
-- **Suspicion level: Lower** (but still detectable)
-
-### 4. **Directional Artifacts**
-
-**Horizontal Artifacts**:
-
-- Lines run left-right
-- Suggests horizontal stretching
-- Typical of landscape scaling
-
-**Vertical Artifacts**:
-
-- Lines run top-bottom
-- Suggests vertical stretching
-- Typical of portrait modifications
-
-**Diagonal Artifacts**:
-
-- 45-degree patterns
-- Suggests non-uniform scaling
-- Indicates suspicious distortion
-
-## Real-World Examples
-
-### Case 1: Enlarged Logo
-
-```
-Situation: Counterfeit document with copied logo
-Analysis: Logo region shows:
-  - Nearest neighbor resampling
-  - Scaling factor: 2.5x enlargement
-  - Artifacts: Clear blocky patterns
-Conclusion: Logo was taken from lower-res source and enlarged
-```
-
-### Case 2: Inserted Photo
-
-```
-Situation: Person added to group photo
-Analysis:
-  - Background: Original 12MP resolution
-  - Person: 8MP resolution resampled to fit
-  - Scaling factor: 1.3x enlargement
-Conclusion: Person image from different source, upscaled to fit
-```
-
-### Case 3: Multiple Compressions
-
-```
-Situation: Suspected multiple edits
-Analysis:
-  - First layer: 3000×2000 resampling
-  - Second layer: 1500×1000 resampling
-  - Third layer: Upsampled to 2400×1600
-Conclusion: Image went through multiple edit cycles
-```
-
-## Resampling vs. Other Techniques
-
-| Technique      | Detects                 | Strength                  | Weakness                 |
-| -------------- | ----------------------- | ------------------------- | ------------------------ |
-| **Resampling** | Scaling, interpolation  | Shows original resolution | Requires reference       |
-| **ELA**        | Compression differences | Shows edited regions      | Doesn't show why         |
-| **Noise**      | Camera fingerprint      | Identifies camera         | Sensitive to compression |
-| **FFT/DCT**    | Frequency anomalies     | Shows artificial patterns | Generic (many causes)    |
+Not implemented: Mahdian & Saic's Radon projections at several angles, which
+would extend the projection test to rotation after JPEG.
 
 ## Limitations
 
-### ⚠️ Important Caveats
-
-1. **Original Resolution Unknown**
-
-   - Can detect resampling but not always original size
-   - Requires reference or metadata
-
-2. **JPEG Compression Masks Patterns**
-
-   - Heavy compression obscures resampling artifacts
-   - Multiple JPEG saves degrade detection
-   - Social media compression destroys evidence
-
-3. **Modern Interpolation**
-
-   - Professional tools use sophisticated algorithms
-   - AI-based upscaling very hard to detect
-   - Artifacts increasingly subtle
-
-4. **Legitimate Uses**
-
-   - Photographers often resize for social media
-   - Cropping requires resampling
-   - Thumbnail creation involves scaling
-   - Not all resampling indicates forgery
-
-5. **Multiple Scaling Types**
-
-   - Camera may use internal scaling
-   - Software may downsample for display
-   - Chain of scaling operations obscures original
-
-6. **Aspect Ratio Changes**
-
-   - Non-uniform scaling (stretching)
-   - Creates different artifacts
-   - Can be confused with distortion
-
-7. **Filters and Processing**
-   - Blur filters reduce resampling visibility
-   - Sharpening can mask patterns
-   - Noise addition covers artifacts
-
-## Best Practices
-
-✔️ **Look for consistency** (entire image vs. specific regions)  
-✔️ **Check for uniform scaling** (expected vs. suspicious)  
-✔️ **Identify interpolation type** (nearest neighbor = suspicious)  
-✔️ **Compare with metadata** (resolution should match)  
-✔️ **Look for directional artifacts** (indicate stretching)  
-✔️ **Use with other techniques** (especially ELA)  
-✔️ **Consider context** (legitimate reasons for resizing exist)  
-✔️ **Check original source** if available  
-✔️ **Examine boundaries** (edges often show clearest patterns)
-
-## Key Questions to Ask
-
-1. Does the scaling factor match claimed image source?
-2. Are resampling artifacts present in suspicious regions only?
-3. Is the interpolation method consistent throughout?
-4. Could the resampling be legitimate (crop, resize, thumbnail)?
-5. Are multiple resampling layers detected?
-6. Do directional artifacts indicate suspicious stretching?
-7. Is compression obscuring the complete picture?
-
-## Practical Indicator Scales
-
-### Resampling Score (0-100):
-
-- **85-100**: No resampling detected (original resolution)
-- **70-84**: Uniform scaling only (likely legitimate)
-- **50-69**: Inconsistent scaling (suspicious)
-- **30-49**: Multiple resampling passes (very suspicious)
-- **Below 30**: Region-specific scaling (likely composite)
-
-### Interpolation Quality Assessment:
-
-- **Nearest Neighbor**: Very basic (suspicious if professional image)
-- **Bilinear**: Professional quality (acceptable)
-- **Bicubic**: High quality (expected for Photoshop)
-- **AI/ML Upscaling**: Very smooth (can't distinguish if artificial)
-
----
-
-_Resampling detection reveals the "growth rings" of image modification – like counting tree rings to determine age. Every time an image is scaled and saved, it leaves characteristic patterns. Analysts can trace these patterns to reconstruct the image's scaling history and detect suspicious insertion of rescaled content._
+- **Down-scaling** is found only in lossless files; after any JPEG, never.
+- **Rotation** is found in lossless files and sometimes at q95; at q90 and
+  below almost never.
+- **JPEG after enlargement**: most 1.1-1.7x enlargements are found at
+  q90-95; at q80 small factors (1.1-1.3x) are often missed.
+- **Smooth 2x** (bilinear/bicubic/Lanczos, centre-aligned) leaves no
+  periodicity. Nearest-neighbour is found by duplication only up to 2x and
+  only in lossless files.
+- In JPEG images the 2-D test cannot see factors whose peak lies within
+  0.01 cycles/px of a multiple of 1/8 (about 1.14x, 1.33x, 1.6x, 2x and
+  aliases); the projection test has a narrower (2.5-bin) blind band.
+- The scale factor is ambiguous by aliasing; all readings are listed.
+- Periodic textures (brick, fabric, screens, halftone) can produce peaks
+  unrelated to resampling. Brick JPEGs came closest to the threshold.
+- A clean result means no periodicity was found at this sensitivity, not
+  that the image was never resized.

@@ -1,172 +1,144 @@
-# 📋 Metadata Analysis
+# Metadata & Content Credentials
 
-## What is Metadata?
+Code: `analysis/metadata_analysis.py` — entry points `analyze_metadata(path)`
+and `read_c2pa(path)`.
 
-Metadata is the **"birth certificate" of a digital image** – hidden information embedded in the file that tells the story of how, when, and where the photo was created. This data is automatically recorded by cameras and editing software but can reveal tampering.
+## What it does
 
-Think of metadata like the **invisible ink** on the back of a photograph that records:
+Reads what the file says about itself and looks for internal
+contradictions. It does **not** produce a score or a verdict: metadata is
+written by software, is trivially edited or removed, and a clean record says
+nothing about the pixels.
 
-- Who took the picture
-- What camera/phone was used
-- When and where it was taken
-- What software touched it afterward
+Sources read (the file is never re-encoded):
 
-## What Does Metadata Measure?
+| Source | How |
+|---|---|
+| EXIF IFD0, Exif IFD, GPS IFD, Interop, IFD1 (thumbnail) | Pillow `getexif()` / `get_ifd()` |
+| EXIF thumbnail bytes | piexif |
+| XMP packet (JPEG APP1, PNG iTXt, WebP, TIFF tag 700) | parsed with ElementTree; packets containing a DTD/entities are refused |
+| PNG tEXt / iTXt / zTXt / eXIf chunks | Pillow `img.text`, `info["exif"]` |
+| C2PA manifest store | c2pa-python `Reader`, offline (no remote manifest fetch, no OCSP) |
 
-- **EXIF Data**: Camera settings (ISO, aperture, shutter speed, focal length)
-- **Device Information**: Camera make, model, serial number
-- **Timestamps**: Creation date, modification date, digitization date
-- **GPS Coordinates**: Location where photo was taken
-- **Software Tags**: Editing tools that processed the image
-- **Image Properties**: Resolution, color space, compression type
-- **Thumbnail Data**: Embedded preview images
+Pillow's `info` fields such as `jfif`, `dpi`, `progressive` are container
+properties, not EXIF, and are not counted as EXIF.
 
-## How to Interpret Results
+## Checks and how to read them
 
-### ✅ Normal Patterns (Likely Authentic)
+Levels: **info** = neutral fact, **notice** = weak indicator, **warning** =
+inconsistency found.
 
-- **Consistent timestamps** (creation = modification time)
-- **Camera manufacturer data** present and complete
-- **GPS coordinates** match claimed location
-- **No editing software tags** (or only trusted apps like Photos.app for viewing)
-- **Thumbnail matches** main image
-- **Reasonable camera settings** for scene conditions
+- **EXIF presence.** JPEG/TIFF without EXIF → notice: stripped by software or
+  messaging apps, or never written. Absence is not evidence either way. PNG,
+  WebP, GIF without EXIF → info (normal for the format).
+- **Software.** EXIF `Software`, `ProcessingSoftware`, XMP `CreatorTool`,
+  XMP History `softwareAgent`, PNG `Software` are matched against a list of
+  known editors (Photoshop, GIMP, Affinity, Pixelmator, Snapseed, PicsArt,
+  Paint.NET, Pixlr, Canva, Luminar, Facetune, Photopea, …) → notice "written
+  by image editor". Raw developers (Lightroom, Camera Raw, darktable,
+  RawTherapee, Capture One, DxO, …) → notice "processed with raw
+  developer/editor" — normal for photographers. Anything else (e.g. phone
+  firmware strings) → info. An editor tag says the file was saved by that
+  program, not what was changed.
+- **Dates.** `DateTime` (last modified), `DateTimeOriginal`,
+  `DateTimeDigitized`, with `OffsetTime*` (used when both sides of a
+  comparison carry one) and `SubSecTime*`.
+  - unparseable, before 1839 or in the future → warning (impossible date);
+  - Digitized earlier than Original → warning;
+  - Modified earlier than Original → warning;
+  - Modified more than 2 s after Original → notice (file written again after
+    capture: editing, raw development, re-export).
+  Blank or all-zero dates are treated as "not set". A wrong camera clock
+  produces the same patterns.
+- **EXIF thumbnail.** The embedded IFD1 thumbnail is compared with the main
+  image downscaled to the thumbnail size. Both are blurred (σ = 1 px),
+  one gain/offset is fitted, and the residual is measured per 8×8
+  thumbnail block. Warning "thumbnail differs from main image — image content
+  changed after the thumbnail was written" when correlation < 0.90 or the
+  worst block's residual is > 9× the median block's. Different aspect ratio →
+  notice only (cropping, or cameras that letterbox thumbnails). The figure
+  shows thumbnail | downscaled main image | residual.
+- **Pixel dimensions.** Image size vs EXIF `PixelXDimension/YDimension`
+  (either orientation) → notice when they differ (resized or cropped after the
+  EXIF was written).
+- **MakerNote.** Absent while `Make` is a maker whose cameras normally write
+  one (Canon, Nikon, Sony, Fujifilm, Olympus/OM, Panasonic, Pentax/Ricoh,
+  Leica, Apple) → notice: software that rewrites EXIF often drops it.
+- **GPS.** Coordinates are reported only when both latitude and longitude are
+  present. A GPS block with only a version ID is reported as "no fix", never
+  as (0, 0).
+- **XMP.** `xmpMM:History` events (action, softwareAgent, when, changed) →
+  notice with a table; `photoshop:DocumentAncestors` → notice (content from
+  other documents was placed in this one); `xmpMM:DerivedFrom` → info;
+  `Iptc4xmpExt:DigitalSourceType` of `trainedAlgorithmicMedia` /
+  `compositeWithTrainedAlgorithmicMedia` → warning (declared AI-generated).
+- **PNG text.** Keys written by image-generation front ends (`parameters`,
+  `prompt`, `workflow`, `Dream`, `sd-metadata`, `invokeai_metadata`, …) →
+  warning "likely AI-generated output".
+- **C2PA Content Credentials.** Claim generator, signer / issuer, signing
+  time, actions, ingredients, validation state and failure codes.
+  - hash mismatch codes (e.g. `assertion.dataHash.mismatch`) → warning: the
+    file was changed after it was signed;
+  - any other failure (except `signingCredential.untrusted`, which is expected
+    because no trust list is configured) → warning;
+  - otherwise info "signature and hashes intact; signer identity unconfirmed";
+  - an action with a `trainedAlgorithmicMedia` digital source type → warning
+    (declared AI-generated content).
 
-### ⚠️ Suspicious Patterns (Possible Manipulation)
+If no notice or warning is raised, the result says which checks ran and
+"no inconsistency found at this sensitivity".
 
-- **Missing EXIF data** (completely stripped metadata)
-- **Software tags** indicating photo editors (Photoshop, GIMP, etc.)
-- **Timestamp mismatches** (creation date after modification date)
-- **Impossible camera settings** (ISO 0, focal length that doesn't exist for that model)
-- **GPS coordinates** don't match image content (beach scene tagged in mountains)
-- **Thumbnail doesn't match** main image (shows original before edits)
-- **Inconsistent device info** (iPhone metadata but Android software tags)
+## Output
 
-## Common Artifacts Detected
+- **metrics:** format, width/height (px), EXIF tag count, XMP history event
+  count, software entry count, C2PA manifest count, and when a thumbnail is
+  compared: thumbnail correlation and worst-block residual (× median).
+- **tables** (only those with content): Camera, Software, Timestamps, GPS,
+  XMP history, PNG text chunks, Full EXIF (stringified, binary values shown
+  as `<N bytes>`), C2PA, C2PA actions.
+- **images:** thumbnail comparison strip (when an EXIF thumbnail exists).
+- **details:** the same data as plain JSON (`exif`, `xmp`, `c2pa`,
+  `thumbnail`, `png_text`).
 
-### 1. **Editing Software Traces**
+`read_c2pa(path)` returns a plain dict: `present`, `validation_state`,
+`valid`, `claim_generator`, `title`, `signer`, `issuer`, `signing_time`,
+`actions`, `ai_generated`, `ai_indicators`, `ingredients`, `manifests`,
+`failures`, `errors`.
 
-```
-Software: Adobe Photoshop CC 2023
-Application: GIMP 2.10
-Creator Tool: Canva
-```
+## Measured performance (thumbnail check)
 
-**What it means**: Image has been processed in editing software
+Seeded benchmark, 8 photos (`assets/sample images/sampleImg.jpeg` + 7
+scikit-image photos) × 40 trials:
 
-### 2. **Stripped Metadata**
+| Case | Flagged |
+|---|---|
+| Genuine 160-px thumbnail (nearest/bilinear/bicubic/Lanczos/box, thumb q50–95, main re-saved q20–100), n = 320 | 0 % |
+| Stale thumbnail, pasted patch 2 % of frame | 98.1 % |
+| … 5 % | 99.4 % |
+| … 10 % | 98.8 % |
+| … 20 % | 99.1 % |
 
-```
-No EXIF data found
-No GPS information
-No camera make/model
-```
+Correlation alone (the previous check) caught only 7–78 % of these. The bundled
+sample image carries a real stale thumbnail (the object in the main image is
+missing from the thumbnail): correlation 0.953, worst block 11.4× → flagged.
+`tests/test_metadata.py` re-runs a 20-case subset (FPR ≤ 5 %, TPR ≥ 90 %).
 
-**What it means**: Someone deliberately removed identifying information
-
-### 3. **Timestamp Anomalies**
-
-```
-Date Created: 2023-05-15 10:30 AM
-Date Modified: 2023-05-10 09:00 AM
-```
-
-**What it means**: Modified date is BEFORE creation date – impossible without tampering
-
-### 4. **Thumbnail Mismatch**
-
-- **Thumbnail**: Shows person with blue shirt
-- **Main Image**: Shows same person with red shirt
-  **What it means**: Image edited after thumbnail was generated
-
-### 5. **GPS Spoofing**
-
-```
-GPS: 40.7128° N, 74.0060° W (New York City)
-Camera: Canon EOS with landscape settings
-But image shows: Eiffel Tower in Paris
-```
-
-**What it means**: Location data doesn't match visual content
-
-## Real-World Example
-
-### Authentic Photo Metadata:
-
-```
-Camera: iPhone 14 Pro
-Date Taken: 2024-12-01 14:22:35
-GPS: 37.7749° N, 122.4194° W (San Francisco)
-Software: iOS 17.1
-ISO: 64
-Aperture: f/1.78
-No editing software detected
-```
-
-**Analysis**: Clean metadata chain, all fields consistent
-
-### Manipulated Photo Metadata:
-
-```
-Camera: [MISSING]
-Date Taken: [MISSING]
-Software: Adobe Photoshop 2024, GIMP
-Modified: 2024-11-30 (one day before claimed date)
-GPS: [STRIPPED]
-Thumbnail: Shows different background
-```
-
-**Analysis**: Multiple red flags indicating post-processing
+The other checks are rule-based and have no threshold to calibrate; they are
+covered by fixture tests (camera EXIF, Photoshop/Lightroom/firmware Software
+tags, stale thumbnail, GPS version only, PNG text chunks, XMP history, date
+inconsistencies, time-zone offsets, C2PA present / absent / tampered).
 
 ## Limitations
 
-### ⚠️ Important Caveats
-
-1. **Metadata Can Be Faked**
-
-   - Sophisticated tools can write fake EXIF data
-   - Timestamps can be manually altered
-   - GPS coordinates can be spoofed
-
-2. **Absence Doesn't Prove Guilt**
-
-   - Social media platforms strip metadata for privacy
-   - Screenshot images naturally lack camera data
-   - Some cameras/phones don't record full EXIF
-
-3. **Presence Doesn't Prove Innocence**
-
-   - Original camera metadata can remain after editing
-   - Some editors preserve EXIF while altering image
-
-4. **Legal Screenshots**
-
-   - Screenshots of real photos won't have original metadata
-   - Forwarded images often lose EXIF in messaging apps
-
-5. **Privacy Stripping**
-   - Many users deliberately remove metadata for privacy
-   - This is normal behavior, not necessarily suspicious
-
-## Best Practices
-
-✔️ **Cross-reference metadata** with image content  
-✔️ **Check for internal consistency** (all timestamps align)  
-✔️ **Look for software tags** indicating editing  
-✔️ **Compare thumbnail** to main image  
-✔️ **Verify GPS** matches visual location markers  
-✔️ **Understand context** (where did the image come from?)  
-✔️ **Use with other techniques** (ELA, noise analysis)
-
-## Key Questions to Ask
-
-1. Does the metadata tell a consistent story?
-2. Are there signs of editing software?
-3. Do timestamps make logical sense?
-4. Is critical information missing or obviously fake?
-5. Does GPS match image content?
-6. Is the camera/device plausible for this photo quality?
-
----
-
-_Metadata is like a digital fingerprint – powerful when present, but its absence or alteration requires investigation through other forensic methods._
+- Metadata can be edited, copied from another file or stripped; an
+  inconsistency can have an innocent cause (wrong camera clock, batch tools,
+  messaging apps), and consistency proves nothing about the pixels.
+- The thumbnail check only works when an editor left the old thumbnail in
+  place, and only sees edits large enough to survive downscaling (≈ 2 % of
+  the frame and up). Global tone edits are not detected (gain/offset is fitted
+  out).
+- The editor and maker-note lists are finite; an unknown editor is reported
+  as "not a known editor".
+- C2PA is validated offline with no trust list: signer identity is never
+  confirmed, remote manifests and certificate revocation are not checked. An
+  absent manifest is the normal case.

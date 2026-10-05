@@ -1,604 +1,376 @@
+"""
+Frequency-domain measurements.
+
+analyze_spectrum: radially averaged power spectrum of the mean-subtracted,
+Hann-windowed luminance. Natural images fall off roughly as 1/f^2
+(D. J. Field, "Relations between the statistics of natural images and the
+response properties of cortical cells", JOSA A 4(12), 1987; A. Torralba and
+A. Oliva, "Statistics of natural image categories", Network 14, 2003). The
+log-log slope and the share of power above half-Nyquist are reported as
+measurements; values outside the range measured on unedited photos are a
+notice only, because scene content moves both numbers as much as editing.
+
+analyze_blocking: block artifact grid (BAG) extraction after W. Li, Y. Yuan,
+N. Yu, "Passive detection of doctored JPEG image via block artifact grid
+extraction", Signal Processing 89(9), 2009 (implementation in
+analysis.util.bag_maps). Reports the global 8x8 grid origin (a non-zero
+origin means the image was cropped after JPEG compression, or is itself a
+pasted JPEG region), and local windows whose grid phase disagrees with the
+global grid. A periodic pattern whose period is not 8 (e.g. nearest-neighbour
+upscaling) is reported as such, not as a JPEG grid.
+"""
 import numpy as np
 from PIL import Image
-from scipy.fft import fft2, fftshift
-from pathlib import Path
-import matplotlib.pyplot as plt
+from scipy import ndimage
+
+from analysis import util
+from analysis.util import error_result, fig_to_array, load_array, make_result
+
+# ── Spectrum ──────────────────────────────────────────────────────
+MAX_SIDE = 2048   # centre square crop; cropping (unlike resizing) keeps the spectrum
+# Interpretation ranges for the log-binned slope (scratchpad fix3/cal_spec.py).
+# Calibration set: sample + 8 skimage photos + 8 camera-pipeline scenes (Bayer
+# RGGB, shot/read noise, cv2 demosaic, half sharpened), each PNG and JPEG
+# q70/85/95: slope -3.01 .. -1.08 (grass), HF 0.19 .. 28.6 %.
+# Hold-out (6 other skimage images + 8 other seeds, 60 negatives):
+#   outside the range 8/60 (13 %): every version of 'cat' (slope -4.3, smooth
+#   fur) and 'colorwheel' (HF 0.02 %, flat graphic) - scene content, as the
+#   limitations say; Gaussian blur s=1.5 13/15, 2x bicubic upscale 3/15,
+#   Gaussian noise s=8 0/15.
+SLOPE_LO, SLOPE_HI = -3.5, -1.0
+HF_LO, HF_HI = 0.0005, 0.30
+
+SPECTRUM_LIMITATIONS = [
+    "The slope and HF share depend mostly on scene content (sky vs foliage, "
+    "focus, depth of field); an out-of-range value is not evidence of editing.",
+    "Upscaling, sharpening and added noise stay inside the range measured on "
+    "unedited photos in most cases; only strong blur is usually visible.",
+    "A whole-image spectrum cannot localise an edit.",
+    f"Images larger than {MAX_SIDE} px are measured on a centre crop.",
+]
 
 
-def radial_power_slope(magnitude_spectrum):
+def _square_crop(g, n):
+    y0, x0 = (g.shape[0] - n) // 2, (g.shape[1] - n) // 2
+    return g[y0:y0 + n, x0:x0 + n]
+
+
+def power_spectrum_stats(gray):
+    """(slope, hf_share, radial_profile, log_power) for a square 2-D array."""
+    n = gray.shape[0]
+    x = gray - gray.mean()
+    x = x * np.outer(np.hanning(n), np.hanning(n))
+    p = np.abs(np.fft.fftshift(np.fft.fft2(x))) ** 2
+    c = n // 2
+    yy, xx = np.ogrid[:n, :n]
+    r = np.hypot(yy - c, xx - c).astype(int)
+    prof = (np.bincount(r.ravel(), p.ravel())[:c]
+            / np.maximum(np.bincount(r.ravel())[:c], 1))
+    slope = float(_loglog_fit(prof)[0])
+    hf = float(p[r > c / 2].sum() / max(p.sum(), 1e-12))
+    return slope, hf, prof, np.log1p(p)
+
+
+def _loglog_fit(prof, nbins=24):
+    """Line fit of log power vs log frequency on log-spaced bins. A plain
+    fit over all radii k=1..c is dominated by the high-frequency end (most
+    radii live there), so noise / JPEG floor sets the slope; equal-width
+    bins in log k weight each octave equally."""
+    k = np.arange(1, prof.size)
+    edges = np.unique(np.geomspace(1, prof.size, nbins + 1).astype(int))
+    idx = np.digitize(k, edges) - 1
+    lk = np.bincount(idx, np.log(k)) / np.maximum(np.bincount(idx), 1)
+    lp = np.bincount(idx, np.log(prof[1:] + 1e-12)) / np.maximum(np.bincount(idx), 1)
+    used = np.bincount(idx) > 0
+    return np.polyfit(lk[used], lp[used], 1)
+
+
+def _profile_plot(prof, slope):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    k = np.arange(1, prof.size)
+    fit = _loglog_fit(prof)
+    fig, ax = plt.subplots(figsize=(6, 3.6))
+    ax.loglog(k, prof[1:], lw=1, label="radial average")
+    ax.loglog(k, np.exp(np.polyval(fit, np.log(k))), "--",
+              label=f"fit, slope {slope:.2f}")
+    ax.axvline(prof.size / 2, color="grey", lw=0.8, ls=":")
+    ax.set_xlabel("spatial frequency (cycles per crop)")
+    ax.set_ylabel("power")
+    ax.legend(fontsize=8)
+    ax.grid(alpha=0.3, which="both")
+    return fig_to_array(fig)
+
+
+def analyze_spectrum(image_path):
     """
-    Slope of log radial power against log spatial frequency.
+    Power-spectrum slope and high-frequency share.
 
-    Natural images follow a 1/f^2 power law, so this lands near -2 for real
-    photographs (measured -2.04 on the bundled sample, and -2.04 to -2.12
-    after recompression). White noise gives ~0 and a smooth synthetic gradient
-    ~-2.9, so the statistic separates natural content from both extremes.
-
-    This replaces scoring on np.std(np.angle(...)), which converges to the
-    standard deviation of a uniform distribution over [-pi, pi] (2*pi/sqrt(12)
-    = 1.814) for *every* image and so carried no information at all.
-
-    Args:
-        magnitude_spectrum (np.array): fftshift-ed FFT magnitudes
-
-    Returns:
-        float: Power-law slope (negative for natural images)
-    """
-    power = magnitude_spectrum.astype(np.float64) ** 2
-    h, w = power.shape
-    cy, cx = h // 2, w // 2
-
-    y, x = np.ogrid[:h, :w]
-    radius = np.sqrt((y - cy) ** 2 + (x - cx) ** 2).astype(int)
-    r_max = min(cy, cx)
-    if r_max < 8:
-        return -2.0  # too small to fit a slope; report the natural value
-
-    totals = np.bincount(radius.ravel(), weights=power.ravel())[:r_max]
-    counts = np.bincount(radius.ravel())[:r_max]
-    profile = totals / np.maximum(counts, 1)
-
-    # Skip DC (radius 0); log-log fit over the rest
-    k = np.arange(1, r_max)
-    return float(np.polyfit(np.log(k), np.log(profile[1:] + 1e-12), 1)[0])
-
-
-def jpeg_blockiness(gray):
-    """
-    Ratio of pixel differences across the 8x8 JPEG grid to those inside blocks.
-
-    JPEG quantises each 8x8 block independently, leaving discontinuities on the
-    block boundaries. 1.0 means no grid; higher means visible blocking.
-    Measured: 1.01 on the sample, 1.23 recompressed at q50, 1.63 at q20.
-
-    This replaces taking 8x8 block variances of a *global* DCT, which is not
-    what JPEG does: in a whole-image DCT the top-left block holds nearly all
-    the energy, so that statistic came out around 90 against thresholds of 0.5
-    and 1.0 and the branch outcome never changed.
-
-    Args:
-        gray (np.array): Grayscale image
-
-    Returns:
-        float: Blockiness ratio (1.0 = no blocking)
-    """
-    g = np.asarray(gray, dtype=np.float64)
-    if g.shape[0] < 16 or g.shape[1] < 16:
-        return 1.0
-
-    ratios = []
-    for axis in (0, 1):
-        diff = np.abs(np.diff(g, axis=axis))
-        # Every 8th difference straddles a block boundary
-        on_grid = diff.take(range(7, diff.shape[axis], 8), axis=axis)
-        off_grid = np.delete(diff, np.s_[7::8], axis=axis)
-        if on_grid.size and off_grid.size:
-            ratios.append(on_grid.mean() / (off_grid.mean() + 1e-9))
-
-    return float(np.mean(ratios)) if ratios else 1.0
-
-
-def analyze_frequency_domain(image_path):
-    """
-    Analyzes image in frequency domain using FFT for tampering detection.
-    Manipulated regions may show different frequency characteristics.
-
-    Args:
-        image_path (str): Path to the image file
-
-    Returns:
-        dict: Frequency analysis results with human-readable interpretation
-    """
-    try:
-        img = Image.open(image_path).convert('L')
-        img_array = np.array(img, dtype=np.float32)
-        img.close()
-
-        # Apply FFT
-        fft_result = fft2(img_array)
-        fft_shifted = fftshift(fft_result)
-        del fft_result  # free unshifted result
-        magnitude_spectrum = np.abs(fft_shifted)
-        phase_spectrum = np.angle(fft_shifted)
-        del fft_shifted  # free complex array
-
-        # Calculate statistics
-        magnitude_mean = np.mean(magnitude_spectrum)
-        magnitude_std = np.std(magnitude_spectrum)
-        magnitude_max = np.max(magnitude_spectrum)
-
-        # Reported for reference only — this converges to 1.814 (the std of a
-        # uniform distribution over [-pi, pi]) for every image, so it is not
-        # scored. The power-law slope below is the metric that carries signal.
-        phase_std = np.std(phase_spectrum)
-
-        # Natural images follow a 1/f^2 power law
-        spectral_slope = radial_power_slope(magnitude_spectrum)
-
-        # Fraction of spectral *power* above half-Nyquist. Power, not
-        # magnitude, and measured past half-Nyquist rather than a third of the
-        # radius: the old definition summed magnitudes over most of the plane's
-        # area, so it returned ~0.76 for a normal photo against a "natural"
-        # band of 0.1-0.3 and every image read as having elevated detail.
-        # Measured with this definition: natural 0.011, blurred 0.0001,
-        # sharpened 0.063, white noise 0.222.
-        h, w = magnitude_spectrum.shape
-        center_h, center_w = h // 2, w // 2
-
-        power = magnitude_spectrum.astype(np.float64) ** 2
-        y, x = np.ogrid[:h, :w]
-        distance = np.sqrt((x - center_w) ** 2 + (y - center_h) ** 2)
-        mask = distance > min(center_h, center_w) / 2
-        total_power = power.sum()
-        high_freq_energy = float(
-            power[mask].sum() / total_power) if total_power > 0 else 0.0
-        del power
-
-        # Detect periodic patterns (common in manipulation)
-        # Look for unexpected peaks in frequency domain
-        spectrum_normalized = magnitude_spectrum / magnitude_max
-        peaks_count = np.sum(spectrum_normalized > 0.5)
-        del spectrum_normalized
-
-        # Free phase spectrum after extracting its stat
-        del phase_spectrum
-
-        # Calculate frequency distribution uniformity
-        freq_histogram = np.histogram(magnitude_spectrum.flatten(), bins=50)[0]
-        freq_uniformity = np.std(freq_histogram) / \
-            (np.mean(freq_histogram) + 1e-10)
-
-        # Generate human-readable interpretation
-        authenticity_score = 0
-        findings = []
-        warnings = []
-        risk_level = "Low"
-
-        # Score based on the natural-image power law (0-50 points)
-        if -3.0 <= spectral_slope <= -1.5:
-            authenticity_score += 50
-            findings.append(
-                f"✓ Power spectrum follows the natural 1/f² law (slope {spectral_slope:.2f})")
-        elif -3.5 <= spectral_slope < -3.0:
-            authenticity_score += 25
-            findings.append(
-                f"⚠ Power spectrum falls off faster than natural (slope {spectral_slope:.2f})")
-            warnings.append(
-                "Spectrum is unusually steep - typical of blurring, denoising or upscaling")
-        elif -1.5 < spectral_slope <= -0.8:
-            authenticity_score += 25
-            findings.append(
-                f"⚠ Power spectrum is flatter than natural (slope {spectral_slope:.2f})")
-            warnings.append(
-                "Spectrum is unusually flat - typical of added noise or sharpening")
-        else:
-            findings.append(
-                f"⚠ Power spectrum departs sharply from natural images (slope {spectral_slope:.2f})")
-            warnings.append(
-                "Spectral falloff is far from the 1/f² law natural photographs follow")
-
-        # Score based on high-frequency content (0-50 points). Bounds come from
-        # measurement: real photos land near 0.011, blurring drops two orders
-        # of magnitude, sharpening and added noise push well past 0.03.
-        hf_percent = high_freq_energy * 100
-        if 0.002 <= high_freq_energy <= 0.03:
-            authenticity_score += 50
-            findings.append(
-                f"✓ Natural amount of fine detail ({hf_percent:.2f}% of power above half-Nyquist)")
-        elif high_freq_energy < 0.002:
-            authenticity_score += 20
-            findings.append(
-                f"⚠ Reduced fine detail ({hf_percent:.3f}% high-frequency power)")
-            warnings.append(
-                "Image appears overly smooth - possible blur, denoising or upscaling")
-        else:
-            authenticity_score += 20
-            findings.append(
-                f"⚠ Elevated high-frequency content ({hf_percent:.2f}% high-frequency power)")
-            warnings.append(
-                "Unusual amount of sharp edges or noise - may indicate sharpening or added noise")
-
-        # Determine risk level
-        if authenticity_score >= 80:
-            risk_level = "Low"
-            verdict = "Image frequency patterns appear natural"
-        elif authenticity_score >= 60:
-            risk_level = "Medium"
-            verdict = "Some frequency irregularities detected"
-        else:
-            risk_level = "High"
-            verdict = "Significant frequency anomalies detected"
-
-        # Create temp directory for visualizations
-        temp_dir = Path(__file__).parent.parent / "temp"
-        temp_dir.mkdir(exist_ok=True)
-
-        # Save magnitude spectrum visualization
-        magnitude_vis_path = temp_dir / 'fft_magnitude_spectrum.png'
-        plt.figure(figsize=(8, 6))
-        plt.imshow(np.log(magnitude_spectrum + 1), cmap='hot')
-        plt.colorbar(label='Log Magnitude')
-        plt.title('FFT Magnitude Spectrum\n(Brighter areas = stronger frequencies)')
-        plt.axis('off')
-        plt.tight_layout()
-        plt.savefig(magnitude_vis_path, dpi=100, bbox_inches='tight')
-        plt.close()
-
-        del magnitude_spectrum  # free after visualization
-
-        result = {
-            "status": "success",
-            "method": "FFT Frequency Domain Analysis",
-            "authenticity_score": authenticity_score,
-            "risk_level": risk_level,
-            "verdict": verdict,
-            "metrics": {
-                "high_frequency_energy_percentage": float(high_freq_energy * 100),
-                # Natural photographs sit near -2.0
-                "spectral_power_law_slope": float(spectral_slope),
-                "spectral_complexity": float(magnitude_std / magnitude_mean)
-            },
-            "findings": findings,
-            "warnings": warnings,
-            "magnitude_spectrum_path": str(magnitude_vis_path),
-            "technical_details": {
-                "magnitude_mean": float(magnitude_mean),
-                "magnitude_std": float(magnitude_std),
-                # Not scored: ~1.814 for every image (std of a uniform [-pi,pi])
-                "phase_std": float(phase_std),
-                "frequency_uniformity": float(freq_uniformity),
-                "peaks_detected": int(peaks_count)
-            },
-            "interpretation": _generate_fft_interpretation(
-                authenticity_score, high_freq_energy, spectral_slope, freq_uniformity)
-        }
-
-        return result
-
-    except Exception as e:
-        return {"error": str(e), "status": "error"}
-
-
-def _generate_fft_interpretation(score, high_freq_energy, spectral_slope, freq_uniformity):
-    """Generate detailed human-readable interpretation for FFT analysis."""
-
-    interpretation = []
-
-    # Overall assessment
-    if score >= 80:
-        interpretation.append(
-            "🟢 **Overall Assessment:** The image's frequency characteristics appear natural and consistent with authentic photos.")
-    elif score >= 60:
-        interpretation.append(
-            "🟡 **Overall Assessment:** Some frequency patterns show minor irregularities that warrant closer examination.")
-    else:
-        interpretation.append(
-            "🔴 **Overall Assessment:** Significant frequency anomalies detected that suggest possible manipulation.")
-
-    # High frequency explanation
-    interpretation.append("\n📊 **Detail Analysis:**")
-    if 0.002 <= high_freq_energy <= 0.03:
-        interpretation.append(
-            "• The amount of fine details (like textures and edges) is typical for natural photos.")
-    elif high_freq_energy < 0.002:
-        interpretation.append(
-            "• The image has fewer fine details than normal - this often happens with:")
-        interpretation.append("  - Heavy compression or resaving")
-        interpretation.append("  - Blur or smoothing filters")
-        interpretation.append("  - AI-generated content")
-    else:
-        interpretation.append(
-            "• The image has more sharp details than typical - this may indicate:")
-        interpretation.append("  - Artificial sharpening filters")
-        interpretation.append("  - Edge enhancement")
-        interpretation.append("  - Composite images from multiple sources")
-
-    # Power-law explanation
-    interpretation.append("\n🌊 **Natural Spectrum Check:**")
-    interpretation.append(
-        f"• Real photographs lose detail at a characteristic rate (a 1/f² power "
-        f"law, slope near -2.0). This image measures {spectral_slope:.2f}.")
-    if -3.0 <= spectral_slope <= -1.5:
-        interpretation.append(
-            "• That is squarely in the natural range for a camera photograph.")
-    elif spectral_slope < -3.0:
-        interpretation.append("• Detail falls off faster than natural, seen with:")
-        interpretation.append("  - Blur or noise reduction")
-        interpretation.append("  - Upscaling from a smaller original")
-    else:
-        interpretation.append("• Detail falls off slower than natural, seen with:")
-        interpretation.append("  - Sharpening filters")
-        interpretation.append("  - Added or synthetic noise")
-        interpretation.append("  - Fully synthetic / rendered content")
-
-    return "\n".join(interpretation)
-
-
-def detect_dct_anomalies(image_path):
-    """
-    Detects DCT (Discrete Cosine Transform) anomalies.
-    JPEG compression uses DCT; manipulation leaves traces in DCT coefficients.
-
-    Args:
-        image_path (str): Path to image file
-
-    Returns:
-        dict: DCT anomaly analysis with human-readable interpretation
+    Images: log power spectrum, radial profile with fit. Metrics: slope,
+    HF share (%), analysed size.
     """
     try:
-        from scipy.fftpack import dct
-
-        img = Image.open(image_path).convert('L')
-        img_array = np.array(img, dtype=np.float32)
-        img.close()
-
-        # Apply 2D DCT
-        dct_result = dct(dct(img_array.T, norm='ortho').T, norm='ortho')
-
-        # Analyze DCT coefficients
-        dct_mean = np.mean(np.abs(dct_result))
-        dct_std = np.std(np.abs(dct_result))
-        dct_max = np.max(np.abs(dct_result))
-
-        # Analyze by frequency regions
-        h, w = dct_result.shape
-
-        # DC coefficient (top-left) - represents average brightness
-        dc_coefficient = np.abs(dct_result[0, 0])
-
-        # Low frequency region (top-left quadrant) - smooth areas
-        low_freq_region = np.abs(dct_result[:h//4, :w//4])
-        low_freq_energy = np.sum(low_freq_region) / np.sum(np.abs(dct_result))
-
-        # Mid frequency region - texture and details
-        mid_freq_region = np.abs(dct_result[h//4:h//2, w//4:w//2])
-        mid_freq_energy = np.sum(mid_freq_region) / np.sum(np.abs(dct_result))
-
-        # High frequency region (bottom-right) - edges and noise
-        high_freq_region = np.abs(dct_result[-h//4:, -w//4:])
-        high_freq_variance = np.var(high_freq_region)
-        high_freq_energy = np.sum(high_freq_region) / \
-            np.sum(np.abs(dct_result))
-
-        # Block-based analysis (8x8 blocks like JPEG)
-        block_size = 8
-
-        # Measure the JPEG grid on the *pixels*, where it actually lives.
-        # Taking 8x8 windows of the global DCT above would instead compare
-        # frequency bands, which is why the old statistic sat around 90 while
-        # the branches below test against 0.5 and 1.0.
-        grid_consistency = jpeg_blockiness(img_array)
-
-        # Per-block texture energy, for the visualisation
-        blocks_h, blocks_w = h // block_size, w // block_size
-        trimmed = img_array[:blocks_h * block_size, :blocks_w * block_size]
-        block_map = trimmed.reshape(
-            blocks_h, block_size, blocks_w, block_size).var(axis=(1, 3))
-        block_variances = block_map.ravel()
-
-        # Detect quantization artifacts
-        # JPEG quantization leaves step patterns in DCT coefficients
-        coeff_histogram = np.histogram(dct_result.flatten(), bins=100)[0]
-        quantization_score = np.sum(coeff_histogram > np.mean(
-            coeff_histogram) * 2) / len(coeff_histogram)
-
-        # Generate human-readable interpretation
-        authenticity_score = 0
+        g, _ = load_array(image_path, "L")
+        n = min(min(g.shape), MAX_SIDE)
+        if n < 16 or g.std() < 1.0:
+            return make_result(
+                "insufficient_data",
+                f"Image is {g.shape[1]}x{g.shape[0]} px or uniform; a "
+                "spectral slope needs at least 16x16 px of varying content.",
+                limitations=SPECTRUM_LIMITATIONS)
+        sq = _square_crop(g, n)
+        slope, hf, prof, logp = power_spectrum_stats(sq)
         findings = []
-        warnings = []
-        anomalies = []
-        risk_level = "Low"
+        if not SLOPE_LO <= slope <= SLOPE_HI:
+            kind = ("steeper (less fine detail: blur, denoising, upscaling, "
+                    "or a smooth scene)" if slope < SLOPE_LO else
+                    "flatter (more fine detail: noise, sharpening, or a "
+                    "highly textured scene)")
+            findings.append(("notice", f"Spectral slope {slope:.2f} is outside "
+                             f"the range measured on unedited photos "
+                             f"({SLOPE_LO} to {SLOPE_HI}): {kind}."))
+        if not HF_LO <= hf <= HF_HI:
+            findings.append(("notice", f"{hf * 100:.3f} % of power lies above "
+                             "half-Nyquist, outside the range measured on "
+                             f"unedited photos ({HF_LO * 100:g}-{HF_HI * 100:g} %)."))
+        if not findings:
+            findings.append(("info", f"Slope {slope:.2f} and HF share "
+                             f"{hf * 100:.2f} % are within the ranges measured "
+                             "on unedited photos: no inconsistency found at "
+                             "this sensitivity."))
+        if n < min(g.shape):
+            findings.append(("info", f"Measured on the centre {n}x{n} px."))
+        return make_result(
+            "ok",
+            f"Measured the radially averaged power spectrum of a {n}x{n} px "
+            f"luminance crop (slope {slope:.2f}).",
+            findings,
+            {"Spectral slope (log power / log freq)": round(slope, 3),
+             "Power above half-Nyquist (%)": round(hf * 100, 4),
+             "Analysed size (px)": f"{n}x{n}"},
+            {"Log power spectrum (centre = DC)": util.to_uint8(logp),
+             "Radial power profile": _profile_plot(prof, slope)},
+            limitations=SPECTRUM_LIMITATIONS,
+            details={"slope": slope, "hf_share": hf, "size": int(n),
+                     "slope_range": [SLOPE_LO, SLOPE_HI],
+                     "hf_range": [HF_LO, HF_HI]})
+    except Exception as e:  # noqa: BLE001
+        return error_result(e, SPECTRUM_LIMITATIONS)
 
-        # Score based on frequency distribution (0-30 points)
-        if 0.4 < low_freq_energy < 0.7:
-            authenticity_score += 30
-            findings.append(
-                "✓ Natural balance between smooth areas and details")
-        elif low_freq_energy > 0.8:
-            authenticity_score += 10
-            findings.append("⚠ Image is very smooth (low detail)")
-            warnings.append(
-                "Excessive smoothing detected - may indicate blur filters or AI generation")
+
+# ── Blocking / BAG ────────────────────────────────────────────────
+# Calibrated (scratchpad p7/cal_grid.py, cal_local.py, sweep_local4.py) on
+# 16 photos (sample + skimage):
+# GRID_MIN: grid reported when jpeg_grid_offset strength >= 1.4. Never-
+#   compressed (0.5x area-downscaled) photos, their NN-2x and bicubic-1.5x
+#   upscales: 0/48 false grids. Cropped JPEGs (random 0-7 px crop) with the
+#   crop offset recovered: q50 15/16, q60 15/16, q70 14/16, q80 12/16,
+#   q90 9/16, q95 5/16 (73 %).
+# Local: 64x64 windows on a 32-px step; a window is misaligned when its
+#   strongest phase pair differs from the global one and beats the global
+#   phase by LOCAL_UNIQ on some axis; MIN_CLUSTER touching windows with the
+#   SAME phase pair are reported (texture gives random phases, a pasted JPEG
+#   one consistent phase). Positives: 25-40 % patch from a q50-80 JPEG
+#   pasted at a non-aligned position into a q70-95 JPEG: saved at q95 6/16,
+#   q100 7/16, PNG 8/16 localised (44 %; 39/48 had a measurable global
+#   grid). Negatives: cropped clean JPEGs q50-95 2/48 flagged (both the
+#   bundled sample, itself a q95 JPEG, so the crop created a real 2nd grid).
+GRID_MIN = 1.4
+AC_MIN = 0.5      # |diff| profile autocorrelation; clean photos max 0.34 (0/16),
+                  # NN 2x 16/16, NN 3x 16/16, bilinear 2x 10/16 (chk_period.py)
+TILE = 32
+LOCAL_UNIQ = 2.0
+MIN_CLUSTER = 5
+GLOBAL_SECOND = 50.0  # % of image: a second grid this widespread is global
+
+BLOCKING_LIMITATIONS = [
+    "JPEG quality >= 90 leaves a weak grid that is often not measurable, "
+    "especially in small or smooth images.",
+    "Resizing, rotation, strong filtering or noise after compression erase "
+    "the grid; a grid-free image may still have been a JPEG.",
+    "A pasted region is only visible if it carries its own grid at a "
+    "different phase and was not recompressed at a lower quality afterwards.",
+    "Flat regions (sky, walls) have no measurable local grid.",
+]
+
+
+DISPLAY_MAX = 1200
+
+
+def _display(a):
+    """Downscale a uint8 image so its longer side is <= DISPLAY_MAX."""
+    h, w = a.shape[:2]
+    s = max(h, w) / DISPLAY_MAX
+    if s <= 1:
+        return a
+    return np.asarray(Image.fromarray(a).resize(
+        (max(1, round(w / s)), max(1, round(h / s))), Image.Resampling.BOX))
+
+
+def _period(g, axis):
+    """Dominant period (px) of the mean |first difference| profile along
+    `axis` (1 = x) and its normalised autocorrelation, lags 2..32."""
+    prof = np.abs(np.diff(g, axis=axis)).mean(axis=1 - axis)
+    if prof.size < 72:
+        return 0, 0.0
+    hp = prof - ndimage.uniform_filter1d(prof, 9)
+    hp = hp - hp.mean()
+    ac = np.correlate(hp, hp, "full")[hp.size - 1:]
+    ac = ac / max(ac[0], 1e-12)
+    lags = ac[2:33]
+    best = float(lags.max())
+    period = int(np.flatnonzero(lags >= 0.8 * best)[0] + 2)
+    return period, best
+
+
+def _local_phase(gh, gv, h, w):
+    """Per-window 8-phase BAG energies (nwy, nwx, 8) for x and y, on
+    2x2-tile (64 px) windows with a TILE-px step."""
+    step = 8  # bag_maps sampling step
+    rows_per_tile = TILE // step
+    nty, ntx = h // TILE, w // TILE
+    # x phases: gh[i, x], x = column; phase = x % 8
+    a = gh[:nty * rows_per_tile, :ntx * TILE]
+    a = a.reshape(nty, rows_per_tile, ntx, TILE // 8, 8).sum(axis=(1, 3))
+    # y phases: gv[y, j]
+    b = gv[:nty * TILE, :ntx * rows_per_tile]
+    b = b.reshape(nty, TILE // 8, 8, ntx, rows_per_tile).sum(axis=(1, 4))
+    b = b.transpose(0, 2, 1)
+    win = lambda t: t[:-1, :-1] + t[1:, :-1] + t[:-1, 1:] + t[1:, 1:]
+    return win(a), win(b)
+
+
+def local_misalignment(gh, gv, h, w, gy, gx):
+    """
+    Returns (score, keep): score[i, j] in [-1, 1] = log2 of global-phase
+    energy over the strongest other phase (min over axes; >0 aligned, <0
+    another phase dominates); keep = windows in clusters of >= MIN_CLUSTER
+    touching misaligned windows sharing one phase pair.
+    """
+    ex, ey = _local_phase(gh, gv, h, w)
+
+    def axis_score(e, g):
+        other = np.delete(e, g, axis=2).max(axis=2)
+        return np.log2((e[..., g] + 1e-9) / (other + 1e-9))
+
+    score = np.minimum(axis_score(ex, gx), axis_score(ey, gy))
+    pair = ey.argmax(axis=2) * 8 + ex.argmax(axis=2)
+    mis = (score < -np.log2(LOCAL_UNIQ)) & (pair != gy * 8 + gx)
+    keep = np.zeros_like(mis)
+    for v in np.unique(pair[mis]):
+        lab, n = ndimage.label(mis & (pair == v))
+        sizes = np.bincount(lab.ravel())[1:]
+        keep |= np.isin(lab, np.flatnonzero(sizes >= MIN_CLUSTER) + 1)
+    return np.clip(score, -1, 1), keep
+
+
+def analyze_blocking(image_path):
+    """
+    JPEG block-artifact-grid analysis.
+
+    Images: BAG map, local alignment heatmap (when a grid is present).
+    Metrics: grid origin, grid strength, dominant period per axis,
+    misaligned area %.
+    """
+    try:
+        g, _ = load_array(image_path, "L")
+        h, w = g.shape
+        if min(h, w) < 64 or g.std() < 1.0:
+            return make_result(
+                "insufficient_data",
+                f"Image is {w}x{h} px or uniform; grid analysis needs at "
+                "least 64x64 px of varying content.",
+                limitations=BLOCKING_LIMITATIONS)
+        gh, gv = util.bag_maps(g)
+        ey, ex = util.phase_energy(gv, 0), util.phase_energy(gh, 1)
+        gy, gx = int(np.argmax(ey)), int(np.argmax(ex))
+        strength = util.grid_uniqueness(ey) * util.grid_uniqueness(ex)
+        px, acx = _period(g, 1)
+        py, acy = _period(g, 0)
+        grid = strength >= GRID_MIN
+        fmt = util.image_format(image_path)
+
+        findings, images = [], {}
+        metrics = {"Grid strength (1 = none)": round(strength, 3),
+                   "Grid origin (x, y) px": f"{gx}, {gy}" if grid else "none",
+                   "Periodicity x / y (px)": " / ".join(
+                       str(p) if ac >= AC_MIN else "none"
+                       for p, ac in ((px, acx), (py, acy)))}
+        details = {"grid": bool(grid), "strength": float(strength),
+                   "origin": [gy, gx], "period": [py, px],
+                   "autocorr": [float(acy), float(acx)], "format": fmt}
+        bag = np.zeros((h, w))
+        bag[4::8, :] = gh
+        bag[:, 4::8] += gv
+        k = max(3, int(np.ceil(max(h, w) / DISPLAY_MAX)) + 1)
+        images["BAG map (block-boundary energy)"] = _display(
+            util.to_uint8(ndimage.maximum_filter(bag, k)))
+
+        if grid:
+            findings.append(("info", f"8x8 JPEG block grid found (strength "
+                             f"{strength:.2f}), blocks start at x={gx}, y={gy}."))
+            if fmt != "JPEG":
+                findings.append(("info", f"File is {fmt} but carries a JPEG "
+                                 "grid: it was JPEG-compressed before being "
+                                 "saved in this format."))
+            if (gx, gy) != (0, 0):
+                findings.append((
+                    "info",
+                    f"Grid origin is not (0, 0): consistent with {(8 - gx) % 8} "
+                    f"column(s) and {(8 - gy) % 8} row(s) removed from the "
+                    "left/top after JPEG compression (a crop), or with the "
+                    "image being a pasted JPEG region."))
+            score, keep = local_misalignment(gh, gv, h, w, gy, gx)
+            n_reg = int(ndimage.label(keep)[1])
+            mis_pct = float(keep.mean() * 100) if keep.size else 0.0
+            metrics["Misaligned-grid area (%)"] = round(mis_pct, 2)
+            details["misaligned_pct"] = mis_pct
+            details["n_misaligned_regions"] = n_reg
+            rgb = np.zeros(score.shape + (3,))
+            rgb[..., 0] = np.clip(-score, 0, 1) * 255   # red: other phase
+            rgb[..., 1] = np.clip(score, 0, 1) * 255    # green: aligned
+            sc = min(TILE, DISPLAY_MAX / max(score.shape) / 1.0)
+            images["Local grid alignment (green aligned, red misaligned, "
+                   "dark = no measurable grid)"] = np.asarray(
+                Image.fromarray(rgb.astype(np.uint8)).resize(
+                    (max(1, round(score.shape[1] * sc)),
+                     max(1, round(score.shape[0] * sc))),
+                    Image.Resampling.NEAREST))
+            if mis_pct >= GLOBAL_SECOND:
+                findings.append((
+                    "notice",
+                    f"A second JPEG grid at another phase covers {mis_pct:.0f}% "
+                    "of the image: consistent with the whole image having "
+                    "been cropped and recompressed (double JPEG), not with a "
+                    "local paste."))
+            elif n_reg:
+                findings.append((
+                    "warning",
+                    f"{n_reg} region(s) ({mis_pct:.1f}% of the image) show "
+                    "a JPEG grid at a different phase from the rest of the "
+                    "image: consistent with content pasted from another JPEG."))
+            else:
+                findings.append(("info", "Tested local windows for a grid "
+                                 "misaligned with the global grid: no "
+                                 "inconsistency found at this sensitivity."))
         else:
-            authenticity_score += 15
-            findings.append("⚠ Unusual frequency distribution")
-            warnings.append("Abnormal distribution of image details")
-
-        # Score based on high-frequency content (0-30 points)
-        if high_freq_energy < 0.05:
-            authenticity_score += 30
-            findings.append("✓ Normal noise levels typical of camera sensors")
-        elif high_freq_energy < 0.1:
-            authenticity_score += 20
-            findings.append("⚠ Slightly elevated noise/edge content")
-        else:
-            authenticity_score += 5
-            findings.append("⚠ High noise or artificial sharpening detected")
-            warnings.append(
-                "Excessive high-frequency content - may indicate sharpening filters or noise")
-            anomalies.append("Artificial sharpening")
-
-        # Score based on JPEG blocking (0-25 points). 1.0 means edges on the
-        # 8x8 grid are no stronger than edges inside blocks, i.e. no grid.
-        if grid_consistency < 1.10:
-            authenticity_score += 25
-            findings.append(
-                f"✓ No visible JPEG grid (blockiness {grid_consistency:.2f})")
-        elif grid_consistency < 1.30:
-            authenticity_score += 15
-            findings.append(
-                f"⚠ Mild JPEG blocking (blockiness {grid_consistency:.2f})")
-        else:
-            authenticity_score += 5
-            findings.append(
-                f"⚠ Strong JPEG grid artifacts (blockiness {grid_consistency:.2f})")
-            warnings.append("Grid-like patterns detected - common in:")
-            warnings.append("  • Images edited after JPEG compression")
-            warnings.append("  • Copy-paste from different sources")
-            warnings.append("  • Multiple compression cycles")
-            anomalies.append("JPEG grid artifacts")
-
-        # Score based on quantization (0-15 points)
-        if quantization_score < 0.15:
-            authenticity_score += 15
-            findings.append("✓ No obvious quantization artifacts")
-        elif quantization_score < 0.25:
-            authenticity_score += 10
-            findings.append("⚠ Minor quantization patterns")
-        else:
-            findings.append("⚠ Strong quantization artifacts detected")
-            warnings.append(
-                "Unusual JPEG compression patterns - may indicate re-compression after editing")
-            anomalies.append("Multiple JPEG compressions")
-
-        # Determine risk level
-        if authenticity_score >= 80:
-            risk_level = "Low"
-            verdict = "DCT analysis shows natural compression patterns"
-        elif authenticity_score >= 60:
-            risk_level = "Medium"
-            verdict = "Some DCT irregularities detected"
-        else:
-            risk_level = "High"
-            verdict = "Significant DCT anomalies suggest manipulation"
-
-        # Create visualization
-        temp_dir = Path(__file__).parent.parent / "temp"
-        temp_dir.mkdir(exist_ok=True)
-
-        dct_vis_path = temp_dir / 'dct_anomaly_map.png'
-
-        # Create DCT coefficient visualization
-        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-
-        # Log-scaled DCT coefficients
-        dct_log = np.log(np.abs(dct_result) + 1)
-        im1 = axes[0].imshow(dct_log, cmap='viridis')
-        axes[0].set_title(
-            'DCT Coefficients\n(Low freq: top-left, High freq: bottom-right)')
-        axes[0].axis('off')
-        plt.colorbar(im1, ax=axes[0], label='Log Magnitude')
-
-        # Per-block texture energy (block_map was computed vectorised above)
-        im2 = axes[1].imshow(np.log1p(block_map), cmap='RdYlGn_r')
-        axes[1].set_title(
-            'Block Texture Map\n(Red = high detail, Green = flat)')
-        axes[1].axis('off')
-        plt.colorbar(im2, ax=axes[1], label='Log Variance')
-
-        plt.tight_layout()
-        plt.savefig(dct_vis_path, dpi=100, bbox_inches='tight')
-        plt.close()
-
-        del dct_result, dct_log, block_map, img_array  # free large arrays
-
-        result = {
-            "status": "success",
-            "method": "DCT Coefficient Analysis",
-            "authenticity_score": authenticity_score,
-            "risk_level": risk_level,
-            "verdict": verdict,
-            "metrics": {
-                "smooth_content_percentage": float(low_freq_energy * 100),
-                "detail_content_percentage": float(mid_freq_energy * 100),
-                "noise_edge_percentage": float(high_freq_energy * 100),
-                # Higher is better
-                "jpeg_blockiness_ratio": float(grid_consistency),
-                # Higher is better
-                "compression_quality_indicator": float((1 - quantization_score) * 10)
-            },
-            "findings": findings,
-            "warnings": warnings,
-            "anomalies": anomalies,
-            "dct_anomaly_map_path": str(dct_vis_path),
-            "technical_details": {
-                "dct_coefficient_mean": float(dct_mean),
-                "dct_coefficient_std": float(dct_std),
-                "high_frequency_variance": float(high_freq_variance),
-                "grid_consistency": float(grid_consistency),
-                "quantization_score": float(quantization_score)
-            },
-            "interpretation": _generate_dct_interpretation(
-                authenticity_score, low_freq_energy, high_freq_energy,
-                grid_consistency, anomalies
-            )
-        }
-
-        return result
-
-    except Exception as e:
-        return {"error": str(e), "status": "error"}
-
-
-def _generate_dct_interpretation(score, low_freq, high_freq, grid_consistency, anomalies):
-    """Generate detailed human-readable interpretation for DCT analysis."""
-
-    interpretation = []
-
-    # Overall assessment
-    if score >= 80:
-        interpretation.append(
-            "🟢 **Overall Assessment:** The image's compression patterns look natural and consistent with authentic photos.")
-    elif score >= 60:
-        interpretation.append(
-            "🟡 **Overall Assessment:** Some compression irregularities detected that may indicate editing.")
-    else:
-        interpretation.append(
-            "🔴 **Overall Assessment:** Significant compression anomalies strongly suggest manipulation.")
-
-    # Frequency content explanation
-    interpretation.append("\n📊 **Content Analysis:**")
-    if 0.4 < low_freq < 0.7:
-        interpretation.append(
-            "• The image has a healthy mix of smooth areas and detailed textures.")
-    elif low_freq > 0.8:
-        interpretation.append("• The image is unusually smooth, suggesting:")
-        interpretation.append("  - Aggressive blur or smoothing filters")
-        interpretation.append("  - Heavy noise reduction")
-        interpretation.append(
-            "  - AI-generated content (often lacks natural texture)")
-    else:
-        interpretation.append(
-            "• Unusual distribution of smooth vs. detailed content.")
-
-    # High frequency explanation
-    interpretation.append("\n🔍 **Edge & Noise Analysis:**")
-    if high_freq < 0.05:
-        interpretation.append(
-            "• Natural amount of camera noise and fine edges present.")
-    elif high_freq < 0.1:
-        interpretation.append(
-            "• Slightly elevated sharpness - may be from camera settings or light editing.")
-    else:
-        interpretation.append(
-            "• Excessive sharpness or noise detected - common causes:")
-        interpretation.append("  - Artificial sharpening filters applied")
-        interpretation.append("  - Noise added to hide manipulation")
-        interpretation.append("  - Over-processed image")
-
-    # Block analysis explanation
-    interpretation.append("\n🎯 **JPEG Compression Analysis:**")
-    interpretation.append(
-        f"• Edges sitting on the 8×8 JPEG grid are {grid_consistency:.2f}× as "
-        f"strong as edges elsewhere (1.00 means no grid is visible).")
-    if grid_consistency < 1.10:
-        interpretation.append(
-            "• No blocking artifacts - consistent with light or no recompression.")
-    elif grid_consistency < 1.30:
-        interpretation.append(
-            "• Mild blocking, normal for a moderately compressed JPEG.")
-    else:
-        interpretation.append(
-            "• Strong grid patterns detected - this typically happens when:")
-        interpretation.append("  - Image is edited then re-saved as JPEG")
-        interpretation.append(
-            "  - Different parts have different compression levels")
-        interpretation.append("  - Objects copied from other images")
-
-    # Specific anomalies
-    if anomalies:
-        interpretation.append("\n⚠️ **Specific Issues Found:**")
-        for anomaly in anomalies:
-            interpretation.append(f"• {anomaly}")
-
-    return "\n".join(interpretation)
+            per = [(a, p, ac) for a, p, ac in (("x", px, acx), ("y", py, acy))
+                   if ac >= AC_MIN and p % 8]
+            if per:
+                findings.append(("info", "Periodic pattern with period " +
+                                 ", ".join(f"{p} px along {a}" for a, p, _ in per) +
+                                 ": typical of upscaling/resampling, not of an "
+                                 "8x8 JPEG grid."))
+            findings.append(("info", "No 8x8 JPEG grid measurable (strength "
+                             f"{strength:.2f} < {GRID_MIN}): never compressed, "
+                             "high quality, or resized after compression. "
+                             "Local grid analysis needs a global grid."))
+        return make_result(
+            "ok",
+            f"Extracted the JPEG block artifact grid from {w}x{h} px "
+            f"({'grid found' if grid else 'no grid'}).",
+            findings, metrics, images, limitations=BLOCKING_LIMITATIONS,
+            details=details)
+    except Exception as e:  # noqa: BLE001
+        return error_result(e, BLOCKING_LIMITATIONS)

@@ -14,13 +14,169 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Batch processing mode for multiple images
 - Report generation (PDF/HTML export)
 - Command-line interface (CLI)
-- API server mode
-- Machine learning-based forgery detection
-- Real-time video frame analysis
-- Advanced CMFD with SIFT/SURF
-- Validate deepfake detection against real GAN-generated imagery
-- RS analysis or Sample Pair Analysis to improve the steganography block heatmap
-- External anchoring of the hash-chain head (public chain or timestamping authority)
+- Optional manual calibration on public datasets (CoMoFoD, CASIA v2,
+  Columbia, RAISE, Dresden) alongside the seeded synthetic benchmarks
+- Trusted timestamping (RFC 3161) for ledger exports
+
+---
+
+## [3.0.0] - 2026-09-29
+
+Forensic rebuild. Every analysis module was re-implemented on a published
+method, with each threshold calibrated on a seeded synthetic benchmark to a
+stated false-alarm rate (the measured numbers are in each
+`Descriptions/*.md`). The guiding rule: report measurements and "inconsistency
+found / not found", never "authentic". The pre-release review had found tabs
+giving falsely reassuring verdicts (the hash tab said "Admissible" for a
+splice; metadata called stripped and Photoshop files "LIKELY AUTHENTIC"),
+tabs reading keys their module never returned, and every image over 2048 px
+being re-saved at JPEG q95 before analysis, destroying the compression
+evidence the JPEG tabs look for.
+
+### Changed - Per module
+
+- **ELA** (`ela.py`) — Krawetz 2007 with one error definition (max over RGB of
+  |original − recompressed|, 16-px window). Fixed: the percentage and mask were
+  computed from the display-stretched image, so they depended on brightness
+  and quality; "high error" is now relative to the image's own median error.
+- **Metadata** (`metadata_analysis.py`) — true EXIF IFDs separated from
+  Pillow `info`; format-aware (no EXIF expected in PNG); editor match against
+  a list of editors, date consistency with OffsetTime, thumbnail comparison,
+  GPS only when both coordinates exist, MakerNote, XMP history and **C2PA
+  Content Credentials** (`read_c2pa`, offline). Fixed: the "LIKELY AUTHENTIC"
+  score, file-system timestamps (those were the server copy's) and the
+  DQT-count "double compression" claim are gone.
+- **Histogram** (`histogram_analysis.py`) — Stamm & Liu 2010
+  contrast-enhancement detector (HF energy of the histogram DFT). Fixed: gaps
+  were counted outside the occupied range, so every image with a narrow
+  histogram looked edited; clipping is now an informational note.
+- **Noise** (`noise_map.py`) — Splicebuster (Cozzolino, Poggi & Verdoliva
+  2015): residual co-occurrence features, PCA and two-class EM. (A Lyu, Pan &
+  Zhang 2014 noise-level version was tried and dropped: it found 2/56 splices
+  and abstained on most JPEGs.) Replaces a
+  squared high-pass difference map that showed edges, not noise.
+- **Quantization tables** (`quant_table.py`) — IJG quality estimate,
+  standard-table test and encoder family vs EXIF Make/Software. Fixed: the tab
+  read keys the module did not return.
+- **Double-JPEG localization** (new, `double_jpeg.py`) — Bianchi & Piva 2012
+  per-block likelihood map, aligned (EM-estimated Q1) and non-aligned (grid
+  shift search).
+- **JPEG ghosts** (`jpeg_ghost.py`) — Farid 2009 with 16×16-window differences
+  normalised per pixel and compared against a (4, 4)-shifted reference. Fixed:
+  the primary quality came from the argmin of the difference curve (biased to
+  the highest tested quality); it now comes from the stored quantization
+  table. The "resaved many times" warnings are gone.
+- **Copy-move** (`cmfd.py`) — SIFT/RootSIFT g2NN matching, Ward clustering and
+  RANSAC affine (Amerini et al. 2011) plus a dense Zernike-moment PatchMatch
+  branch (Cozzolino, Poggi & Verdoliva 2015), each hypothesis verified by a
+  local ZNCC map. Fixed: block matching only found clones at 8-px-aligned
+  offsets; any shift, rotation and scale is now handled.
+- **PRNU** (`prnu.py`) — Goljan's ZeroMeanTotal and WienerInDFT, PCE alongside
+  NCC (PCE > 60 decision), local splice test with the Chen et al. 2008
+  correlation predictor skipping dark/saturated blocks. Large images are
+  centre-cropped, never resized. The "Pattern Strength" colours are gone.
+- **Frequency** (`frequency_analysis.py`) — `analyze_spectrum` (mean-subtracted,
+  Hann-windowed radial spectrum slope and HF share) and `analyze_blocking`
+  (block artifact grid, Li, Yuan & Yu 2009: grid origin, i.e. crop offset,
+  and misaligned-grid regions). Fixed: the DC term dominated the spectrum
+  because the mean was not subtracted, and blockiness was only measured at
+  grid offset (0, 0). "Compression Quality" and the /100 scores are gone.
+- **Resampling** (`resampling_detector.py`) — Kirchner 2008 fixed-predictor
+  p-map spectrum with the JPEG lattice notched out (Kirchner & Gloe 2009),
+  128×128 window heatmap, explicit nearest-neighbour duplication test. Fixed:
+  every JPEG at q ≤ 50 was reported as resized, and images under 32 px raised
+  `KeyError`.
+- **Synthetic traces** (`deepfake_detector.py`, Experimental) — periodic peaks
+  in the noise-residual power spectrum and autocorrelation (Corvi et al.
+  2023) and the azimuthal spectrum (Durall et al. 2020), reported as
+  measurements. The quadrant-symmetry check, the centre-of-spectrum "HF"
+  metric, the Low/Medium/High verdict and "✅ No GAN indicators" are gone;
+  the tab keys that did not match the module are fixed.
+- **Steganography** (`steganography_detection.py`) — Weighted Stego (Ker &
+  Böhme 2008) as decision statistic, Sample Pairs (Dumitrescu 2003) and RS
+  analysis as cross-checks, PoV chi² as a sequential-embedding curve, local
+  WS heatmap. Fixed: the interpretation text was inverted (a high PoV p-value
+  is the stego sign). JPEG input states that DCT-domain stego is invisible.
+- **Hash ledger** (`hash_verification.py`) — identity is SHA-256 of the file
+  bytes (plus a pixel SHA-256 that survives metadata-only changes);
+  pHash/dHash/aHash are reported as "visually similar (distance d)", never as
+  integrity. Fixed: a copy-paste splice matched by pHash was reported as
+  "✅ Admissible"; merging an imported ledger broke the chain (imports are now
+  re-linked onto the current tail and deduplicated).
+- **App** (`app.py`) — 13 tabs rendered by one `render()` function, so a tab
+  can no longer read keys its module does not return; per-session temporary
+  directory with random file names (two visitors uploading `image.jpg` no
+  longer collide); in-app "indicators, not proof" disclaimer; results cached
+  per image. Fixed: the > 2048 px JPEG q95 re-save before analysis is gone —
+  all tabs read the original bytes; copy-move uses an in-memory downscale to
+  2048 px and reports the analysed size.
+
+### Changed - Breaking
+
+- **Result contract.** Every public analysis function returns
+  `analysis.util.make_result(...)`:
+  `{status, summary, findings, metrics, images, tables, limitations, details}`
+  with `status` in `ok | insufficient_data | not_applicable | error` and
+  findings levelled `info | notice | warning`. Images are uint8 arrays
+  returned in memory; no module writes PNGs to disk any more. Analysis entry points never
+  raise; failures come back as `status: "error"`. See `docs/API.md`.
+- **Old entry points removed → replacements:**
+  - `perform_ela`, `multi_quality_ela`, `forensic_analysis`, `threshold_ela`,
+    `noise_map`, `sharpness_map`, `ssim_map`, `entropy_map` → `ela.analyze_ela(path, quality=90)`
+  - `extract_metadata`, `full_metadata_analysis`, `detect_thumbnail_mismatch`,
+    `analyze_file_structure`, `export_metadata_report` → `metadata_analysis.analyze_metadata(path)`, `read_c2pa(path)`
+  - `generate_histogram`, `detect_histogram_anomalies` → `histogram_analysis.analyze_histogram(path)`
+  - `generate_noise_map` → `noise_map.analyze_noise(path)`
+  - `detect_jpeg_ghost`, `detect_ghost` → `jpeg_ghost.analyze_jpeg_ghost(path, qualities=range(50, 100, 5))`
+  - (new) `double_jpeg.analyze_double_jpeg(path)`
+  - `detect_copy_move(path, block_size, threshold, min_distance)` → `cmfd.detect_copy_move(path, max_px=2048)`
+  - `analyze_prnu(path, reference_image_path)`, `extract_prnu_pattern`,
+    `compute_prnu_correlation` → `prnu.analyze_prnu(path, reference_paths=None, max_px=2048)`
+  - `analyze_frequency_domain`, `detect_dct_anomalies` → `frequency_analysis.analyze_spectrum(path)`, `analyze_blocking(path)`
+  - `detect_deepfake_artifacts`, `detect_gan_fingerprint` → `deepfake_detector.analyze_synthetic_traces(path)`
+  - `detect_resampling` keeps its name with the new contract;
+    `detect_interpolation_method` removed
+  - `detect_lsb_steganography`, `batch_detect`, `analyze_blocks` → `steganography_detection.analyze_lsb(path)`
+  - `verify_image_provenance`, `add_to_blockchain`, `load_database`,
+    `save_database`, `export_database`, `import_database`,
+    `get_database_stats`, `compute_record_hash`, `generate_*_hash` →
+    `hash_verification.compute_hashes`, `new_ledger`, `add_record`,
+    `verify_chain(ledger)`, `verify_image(ledger, path)`,
+    `export_ledger(ledger, key)`, `import_ledger(data, key, into)`,
+    `ledger_stats(ledger)` — pure functions over an in-memory ledger list
+  - `util.resize_image`, `convert_to_grayscale`, `load_image_cv`,
+    `get_image_info` → `util.load_array(path, mode, max_px)` (decode without
+    re-encoding), `make_result`, `error_result`, grid helpers
+
+### Removed
+
+- Authenticity scores, risk levels and verdicts in every module.
+- Legal-admissibility and chain-of-custody wording ("Admissible", "Legal
+  Status"). The ledger states that it is not a legal chain of custody.
+- The shared on-disk hash database (`temp/hash_database.json`); the ledger is
+  per session, exported as JSON.
+- The interpolation-method detector (`detect_interpolation_method`).
+- The "Run All Analyses" stub checkbox.
+
+### Testing
+
+- 142 tests, run with `python -m unittest discover -s tests -t .` (no pytest
+  needed). `tests/test_integration.py` was deleted; each module has
+  `tests/test_<module>.py` with a seeded synthetic benchmark asserting its
+  detection rate and false-alarm rate, and `tests/test_contract.py` runs every
+  entry point on JPEG, PNG, grayscale, RGBA, palette, 16×16, 1×1 and flat
+  images, asserting the contract and banning overclaiming wording.
+
+### Deployment
+
+- `requirements.txt` pinned to the versions the suite was run against
+  (Python 3.10). Added `PyWavelets` (PRNU/noise residuals) and `c2pa-python`
+  (Content Credentials); dropped `plotly` and `pandas`.
+- `.python-version` (3.10) for Streamlit Cloud and pyenv.
+- Optional `st.secrets["LEDGER_KEY"]` enables HMAC-SHA256-signed ledger
+  exports.
+- `.streamlit/config.toml`: `showErrorDetails = "type"` (no tracebacks shown
+  to visitors).
 
 ---
 
@@ -368,6 +524,7 @@ constant for every input:
 
 ## Version History
 
+- **v3.0.0**: Forensic rebuild — published methods, result contract, per-session ledger, C2PA
 - **v2.0.0**: Correctness release — six modules fixed, metric API changes
 - **v1.1.0**: Steganography detection and hash verification
 - **v1.0.0**: Full production release with 11 techniques, comprehensive docs, testing
@@ -377,6 +534,20 @@ constant for every input:
 ---
 
 ## Upgrade Guide
+
+### From 2.0.0 to 3.0.0
+
+**Breaking Changes**: Yes — every analysis function was replaced (see
+"Changed - Breaking" under 3.0.0). The Streamlit app needs no action.
+
+1. `pip install -r requirements.txt` (new pins; adds `PyWavelets`,
+   `c2pa-python`) on Python 3.10.
+2. Code calling `analysis/` directly: switch to the new entry points and read
+   `result["status"]`, `result["metrics"]`, `result["findings"]` instead of
+   module-specific keys. There are no scores to migrate.
+3. The shared `temp/hash_database.json` is no longer read. Re-add images in a
+   session and export the ledger; old database files are not importable.
+4. Run the tests with `python -m unittest discover -s tests -t .`.
 
 ### From 1.1.0 to 2.0.0
 

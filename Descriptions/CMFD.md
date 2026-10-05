@@ -1,236 +1,206 @@
-# 🔄 Copy-Move Forgery Detection (CMFD)
+# Copy-Move Forgery Detection (CMFD)
 
-## What is Copy-Move Forgery Detection?
+## What it looks for
 
-Copy-move forgery is when someone **copies one part of an image and pastes it elsewhere** to hide, duplicate, or alter content. CMFD is like a **fingerprint comparison system** – it finds regions that are suspiciously identical, revealing where copying occurred.
+Copy-move forgery means copying part of an image and pasting it somewhere
+else in the **same** image, to hide something (paint sky over an object) or
+duplicate something (a second crowd, a second cloud). The pasted part may be
+rotated, rescaled or mirrored. This tab searches the image for pairs of
+regions that are copies of each other under one affine transform (shift +
+rotation + scale, optionally mirrored).
 
-Think of it like:
+It cannot see content pasted from a *different* image (splicing). Use ELA,
+JPEG ghost, double-JPEG or noise analysis for that.
 
-- **Detective checking photos** for the same person appearing twice in impossible places
-- **Art authenticator** spotting when an artist used the same brush stroke twice
-- **Forensic examiner** finding duplicate fingerprints at a crime scene
+## What the code does
 
-## What Does CMFD Measure?
+The image is decoded without re-encoding and, if its long side exceeds
+`max_px` (default 2048), downscaled in memory. The analysed size is shown.
 
-- **Block similarities** across the image (16×16 pixel blocks by default)
-- **Feature matching** between regions
-- **Spatial relationships** of matching blocks
-- **Distortion patterns** (rotated, scaled, or skewed copies)
-- **DCT coefficient matching** for JPEG images
-- **Keypoint descriptors** (SIFT-like features)
+1. **Keypoint branch** (Amerini et al., IEEE TIFS 2011). SIFT keypoints (low
+   contrast threshold, up to 20 000, computed at ≤ 1536 px) with RootSIFT
+   descriptors are matched against the image itself with the generalised
+   2-nearest-neighbour test (ratio 0.5). Descriptors of the **left-right
+   flipped** image are matched as well (the MIFT idea, Jaberi et al. 2014), so a
+   mirrored copy is matched like a normal one. Pairs closer than 30 px are
+   dropped. Matched locations are grouped by Ward clustering and each group
+   gets RANSAC affine fits (3 px tolerance, ≥ 4 inliers; a reflection is
+   allowed).
+2. **Dense branch** (Cozzolino, Poggi & Verdoliva, IEEE TIFS 2015). At
+   ≤ 1024 px (and ≤ 0.6 MP), 12 rotation- and mirror-invariant Zernike-moment
+   magnitudes (order ≤ 5, 13 px disc) per pixel, projected onto their top
+   8 principal axes to save time. PatchMatch finds, for each pixel, its
+   most similar pixel at least 30 px away. It uses the paper's first-order
+   propagation (a neighbour's offset, and the prediction 2·δ(n′) − δ(n″) so
+   rotated and scaled clones, whose offsets change linearly, propagate) and
+   random search with the radius halving from the image size down to 1,
+   8 iterations. The offset field is median-filtered and a dense linear fit
+   is computed in 7×7 windows. Inside a clone the offsets vary smoothly (fit
+   error < 1 px²), elsewhere they are random. Flat pixels (local std
+   < 2.5 grey levels) are excluded.
+3. **Verification** (Amerini et al. 2013, after Pan & Lyu 2010). At analysis
+   resolution, each hypothesis warps the image onto itself. Pixels whose 7×7
+   ZNCC with their copy is > 0.7 are kept, and so are connected regions
+   that touch the hypothesis' own matches and cover ≥ 900 px (or 0.1 % of a
+   large image).
+4. **Region test** (added here, calibrated on seeded data). A real clone
+   differs from its copy only by the resampling the paste implies and by
+   JPEG compression applied afterwards. The region's median local |difference|
+   must therefore be ≤ 2.0 + 1.5 × *resampling residual* + 0.06 × (100 − JPEG
+   quality). The *resampling residual* is measured by warping the region with
+   the fitted transform and back. The quality is read from the file's
+   quantization table, and is 0 for PNG/TIFF. A near-pure translation is
+   rounded to whole pixels first. Natural look-alikes (grass, gravel, text,
+   repeated structure) correlate well but differ by more than this. A
+   hypothesis found only by the dense branch, with fewer than 4 keypoint
+   matches supporting it, also needs ZNCC ≥ 0.85 and ≥ 0.4 grey levels of
+   fine detail (noise or texture). Without the detail check, smooth synthetic
+   gradients match themselves under many rotations.
 
-## The Similarity Threshold
+A **warning** is only raised when a hypothesis passes steps 3 and 4. Stray
+keypoint matches alone produce an `info` line.
 
-The default is **0.99**, and it is deliberately strict. Because features are
-texture-only, a genuine cloned region matches at essentially **1.0**, while
-unrelated blocks in a normal photo top out around 0.99.
+## How to read the output
 
-Measured on the bundled sample image:
+**Image: Duplicated regions.** Green = copy A, red = copy B, yellow lines =
+the RANSAC-inlier keypoint matches. The method cannot tell which copy is the
+original; the colours only mark the two sides of each match.
 
-| Threshold | Clean image | Image with a cloned block |
-| --------- | ----------- | ------------------------- |
-| 0.95      | saturated   | saturated                 |
-| 0.97      | 254 matches | 437 matches               |
-| **0.99**  | **1 match** | **123 matches**           |
+**Image: Dense offset-field consistency.** Bright pixels have locally
+consistent nearest-neighbour offsets (dense-branch scale). Large bright areas
+without a verified clone usually mean repetitive texture or flat areas.
 
-Lowering the slider below ~0.97 will match almost everything and tell you
-nothing. Raise it if a textured image still produces noise.
+| Metric | Meaning |
+| --- | --- |
+| Analysed size (px) | Resolution actually analysed (after `max_px`). |
+| SIFT keypoints | Keypoints in the original image; very few (< ~200) means the keypoint branch had little to work with. |
+| g2NN matches | Self-matches (direct + mirrored) that passed the 0.5 ratio test and the 30 px distance. Not evidence on its own. |
+| Verified clones | Hypotheses that passed verification and the region test. |
+| Duplicated area (% of image) | Union of both copies of all verified clones. |
 
-## How to Interpret Results
+**Table: Clone hypotheses**: one row per verified clone, with:
 
-### ✅ Normal Patterns (Likely Authentic)
+- **branch**: keypoint or dense.
+- **RANSAC inliers**: 0 for dense.
+- **Centres of both copies**, in original image pixels.
+- **Shift B − A**.
+- **rotation A->B (deg, CCW +)**, **scale A->B**, **mirrored A->B**: the
+  convention is `B = scale · R(rotation) · [mirror left-right] · A`, with the
+  rotation counter-clockwise on screen (the OpenCV `getRotationMatrix2D`
+  sign). Because A/B is arbitrary, an unmirrored clone rotated +20° and
+  scaled 1.05 may be reported as −20° and 0.95. For a mirrored clone, the
+  angle is the same in both directions.
+- **ZNCC**: median local correlation over the region.
+- **mean |diff|**: median local difference in grey levels.
+- **resampling |diff|**: the part of that difference the transform alone
+  explains.
+- **fine detail**.
+- **keypoint support**: keypoint inliers consistent with this transform.
 
-- **No matching blocks** detected
-- **Unique feature descriptors** throughout image
-- **No suspicious clustering** patterns
-- **Natural variations** in repeated elements (leaves, tiles, ripples)
+A clone with ZNCC near 1 and |diff| near 0 is a pixel-exact copy.
 
-### ⚠️ Suspicious Patterns (Possible Manipulation)
+## Measured performance
 
-1. **Exact Block Matches**
+The thresholds were calibrated on one seeded set. The numbers below come from
+**different** photos and seeds (hold-out). "Found" means the predicted mask
+overlaps the ground truth with pixel F1 > 0.3 (set A) or a reported clone
+centre lies on a ground-truth copy (set B). Hold-out sizes are small (n = 8–18
+per cell), so treat each number as ±0.1–0.15.
 
-   - Identical blocks at different locations
-   - Perfect correlation indicates copying
+**Hold-out A**: an independent reviewer's benchmark. 72 clones in
+coffee/chelsea/rocket/motorcycle/immunohistochemistry/bundled sample, size
+40–128 px, rotation −45..180°, scale 0.8–1.2, 25 % mirrored, PNG or JPEG
+q60–95. The previous version is shown for comparison:
 
-2. **Clustered Matches**
+| Subset | n | Found (old) | Found (now) | Mean pixel F1 (now) |
+| --- | --- | --- | --- | --- |
+| 40 px clones | 18 | 0.17 | 0.44 | 0.39 |
+| 64 px | 18 | 0.33 | 0.61 | 0.54 |
+| 96 px | 18 | 0.50 | 0.72 | 0.61 |
+| 128 px | 18 | 0.67 | 0.78 | 0.72 |
+| mirrored, ≥ 64 px | 18 | 0.22 | 0.89 | 0.75 |
+| not mirrored, ≥ 64 px | 36 | 0.64 | 0.61 | 0.56 |
+| JPEG q60–75, ≥ 64 px | 15 | 0.33 | 0.67 | 0.61 |
 
-   - Large groups of matching blocks in specific regions
-   - Shows where copy-paste occurred
+The one non-mirrored case that dropped is on the bundled sample, which has
+real cloned clouds of its own. Those clouds are now also found by the dense
+branch, which lowers F1 against the synthetic ground truth. Pure-translation
+clones in the smooth sky of `rocket` are missed.
 
-3. **Geometric Patterns**
+**Hold-out B**: camera-like renders (scene → Bayer RGGB → shot + read noise →
+bilinear demosaic → optional sharpening) of coffee, chelsea, rocket,
+motorcycle and immunohistochemistry, seed 99. Clones as in set A:
 
-   - Rectangular regions of matches
-   - Indicates deliberate copy operation
+| Subset | n | Found |
+| --- | --- | --- |
+| 40 px | 15 | 0.40 |
+| 64 / 96 / 128 px | 15 each | 0.87 / 0.87 / 0.93 |
+| mirrored, ≥ 64 px | 12 | 1.00 |
+| JPEG q60–75, ≥ 64 px | 16 | 0.88 |
+| clean renders (PNG, JPEG q92/85/75/60) | 25 | **0 false alarms** |
+| wrong-place clones in forged images | 60 | 0 |
 
-4. **Edge Detection**
+**Negatives in hold-out A** (the reviewer's sets):
 
-   - Sharp boundaries between matched regions
-   - Shows artificial boundaries of pasted content
+- 6 clean photos × (PNG, q95/85/75/60): no detection except on the bundled
+  sample. That image contains genuinely cloned clouds, shifted 317 px and
+  90 px with ZNCC ≥ 0.98, and they are reported at every quality.
+- Textures and graphics (grass, gravel, brick, checkerboard, horse
+  silhouette, colour wheel; PNG and q70): 0 false alarms. Before this change,
+  grass, gravel and the colour wheel gave 18.6 %, 2.9 % and 12 %.
 
-5. **Distortion Artifacts**
-   - Slightly rotated or scaled copies
-   - Suggests attempt to disguise duplication
+With 25–40 negatives per set, a 0 count means a false-alarm rate below
+roughly 5–10 %, not zero.
 
-## Common Artifacts Detected
+Repeated content **is** reported, because it is repeated: a tiled photo
+after JPEG (99 %), a scene made of a photo and its mirror image (86 %),
+lines of identical text (36–48 %). Those are duplicates; the method cannot
+know they are harmless.
 
-### 1. **Simple Copy-Paste (Easiest to Detect)**
+Calibration set (for reference, not a performance claim): camera-pipeline
+renders of astronaut/camera/retina/cat with 96 clones gave TPR 0.71. Its
+40 clean renders plus brick/moon/coins/Hubble/page gave 0 false alarms.
 
-```
-Original Region: Person A at location X
-Copied Region:   Person A at location Y (identical pixels)
-```
-
-**Analysis**: Exact duplicate indicates forgery
-
-### 2. **Object Duplication**
-
-- Tree cloned multiple times to make forest look denser
-- Repeated person in group photo
-- Duplicate building or vehicle
-
-### 3. **Content Concealment**
-
-- Unwanted person copied over with background
-- Undesirable object hidden by pasting grass/sky over it
-
-### 4. **Background Manipulation**
-
-- Repeated texture to remove unwanted elements
-- Cloned sky to hide airplanes or birds
-
-### 5. **Sophisticated Forgeries**
-
-- Rotated or scaled copies (more subtle)
-- Blurred edges to hide copying boundaries
-- Combined with other regions for natural blending
-
-## Detection Process Explained
-
-**Step 1: Block Division**
-
-- Image divided into overlapping blocks (16×16 by default, adjustable 8-32)
-- Blocks step by half their width, so neighbours overlap 50%
-
-**Step 2: Feature Extraction**
-
-- Each block is transformed with a DCT
-- The low-frequency coefficients become the block's signature
-- **The DC coefficient is deliberately excluded.** DC is just the block's
-  average brightness, and it is so much larger than everything else that
-  including it makes matching compare brightness instead of texture — two
-  completely unrelated blocks then score 0.95 similarity.
-
-**Step 3: Matching**
-
-- Feature vectors are sorted so near-identical blocks land next to each other,
-  then each block is compared against its neighbours in that order
-- Similarity is a cosine score from 0 to 1
-- Matches closer together than the minimum distance are discarded, since
-  adjacent blocks naturally resemble each other
-
-**Step 4: Clustering**
-
-- Matching blocks grouped together
-- Geographic clusters identified
-
-**Step 5: Visualization**
-
-- Matching regions highlighted with colored outlines
-- Heatmap shows confidence of matches
-
-## Real-World Examples
-
-### Case 1: Crowd Photo Faker
-
-**What happened**: Person added themselves to group photo by copying
-**CMFD Detection**:
-
-- Head region matches person from another photo exactly
-- Shoulders show perfect alignment of duplicated blocks
-- Body shows repeat of same texture pattern
-
-**Verdict**: Clear copy-move forgery
-
-### Case 2: Landscape Manipulation
-
-**What happened**: Forest made to look denser by copying trees
-**CMFD Detection**:
-
-- Same tree cluster appears multiple times
-- Identical branch patterns at different locations
-- Geometric alignment too perfect to be natural coincidence
-
-**Verdict**: Artificial enhancement through copying
-
-### Case 3: Evidence Tampering
-
-**What happened**: Unwanted person in crime scene photo covered up
-**CMFD Detection**:
-
-- Background region appears twice (original + copied over person)
-- Edge discontinuities where copy boundaries don't align
-- Lighting inconsistencies at paste edges
-
-**Verdict**: Content removal via copy-paste
+**Runtime and memory.** For a 12 MP JPEG (4000×3000, analysed at 2048×1536),
+the run took 16 s with a peak of 489 MB (tracemalloc) and a 603 MB process
+working set. For 0.3–0.7 MP images it takes 5–10 s. The dense PatchMatch
+dominates.
 
 ## Limitations
 
-### ⚠️ Important Caveats
+- **Small clones are weak**: about half of 40 px clones are missed, and
+  more are missed after JPEG. Large photos are analysed at 2048 px, so a
+  clone must be ≥ ~60 px *after* that downscale.
+- Clones of **flat, featureless areas** (clear sky, plain walls) cannot be
+  detected. A copy of nothing looks the same as nothing.
+- **Naturally repeated content** that really is near-identical (tiled
+  textures, repeated logos, text, symmetric scenes) is reported. Look at every
+  hypothesis before drawing a conclusion.
+- **Heavy JPEG** (q < 60), blur, added noise or strong rescaling after pasting
+  weakens both keypoints and correlation. The region test also assumes the
+  file's own JPEG quality: a clone pasted, saved at q60, then re-saved at q95
+  is judged against q95 and may be rejected.
+- Each clone is modelled as **one affine transform**. Perspective warps,
+  non-rigid edits and clones assembled from several pieces may come out as
+  several small regions or not at all.
+- Copies closer than 30 px to their source are not searched.
+- Mask edges are approximate: flat surroundings that also match under the
+  same transform get included.
 
-1. **Natural Repetition**
+## References
 
-   - Brick patterns, tile floors, leaf clusters
-   - Naturally identical blocks aren't forgery
-   - Algorithm must distinguish between natural and artificial repetition
-
-2. **Rotation & Scaling**
-
-   - Simple block matching misses rotated copies
-   - Advanced algorithms can detect these, but with lower confidence
-
-3. **Blending Techniques**
-
-   - Skilled forgers blend copy boundaries
-   - Partially blurred edges reduce match confidence
-
-4. **Multiple Copies**
-
-   - Source region copied many times
-   - Hard to identify which is original
-
-5. **JPEG Compression**
-
-   - Compression reduces block distinctiveness
-   - Can cause false negatives on heavily compressed images
-
-6. **Image Resolution**
-
-   - Low-resolution images have fewer blocks
-   - Small copies hard to detect
-
-7. **Sophisticated Edits**
-   - Content-aware fill creates new pixels
-   - Not technically "copied" but looks forged
-
-## Best Practices
-
-✔️ **Use for initial screening** of suspected forgeries  
-✔️ **Examine clustered regions** carefully (strongest evidence)  
-✔️ **Consider context** (is this repetition natural for this scene?)  
-✔️ **Look for edge artifacts** (blurring, boundary misalignment)  
-✔️ **Combine with other techniques** (ELA often corroborates)  
-✔️ **Analyze at multiple scales** (zoom in and out)  
-✔️ **Consider likelihood** (would a real scene have this pattern?)
-
-## Key Questions to Ask
-
-1. Are matching blocks in geometrically suspicious locations?
-2. Could the repetition be natural for this type of scene?
-3. Are there edge artifacts or boundary discontinuities?
-4. Is lighting consistent across matched regions?
-5. Do the copy positions align with logical forgery goals?
-6. Are there other forensic indicators supporting copy-move evidence?
-
----
-
-_CMFD is like a forensic fingerprint system – it finds exact matches that reveal where copying occurred. While natural repetition can complicate analysis, true forgeries leave geometric and spatial patterns that are difficult to hide._
+- I. Amerini, L. Ballan, R. Caldelli, A. Del Bimbo, G. Serra, "A SIFT-based
+  forensic method for copy-move attack detection and transformation recovery",
+  IEEE TIFS 6(3), 2011.
+- I. Amerini, L. Ballan, R. Caldelli, A. Del Bimbo, L. Del Tongo, G. Serra,
+  "Copy-move forgery detection and localization by means of robust clustering
+  with J-Linkage", Signal Processing: Image Communication 28(6), 2013.
+- D. Cozzolino, G. Poggi, L. Verdoliva, "Efficient dense-field copy-move
+  forgery detection", IEEE TIFS 10(11), 2015.
+- M. Jaberi, G. Bebis, M. Hussain, G. Muhammad, "Accurate and robust localization of
+  duplicated region in copy-move image forgery" (MIFT), Machine Vision and
+  Applications 25, 2014.
+- X. Pan, S. Lyu, "Region duplication detection using image feature
+  matching", IEEE TIFS 5(4), 2010.
+- R. Arandjelović, A. Zisserman, "Three things everyone should know to improve
+  object retrieval" (RootSIFT), CVPR 2012.

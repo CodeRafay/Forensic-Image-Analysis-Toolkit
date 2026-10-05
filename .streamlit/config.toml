@@ -8,10 +8,11 @@ font="sans serif"
 
 [server]
 headless = true
+maxUploadSize = 25  # MB; with the 40 MP pixel cap in app.py
 port = 8501
 
 [client]
-showErrorDetails = true
+showErrorDetails = "type"
 
 [logger]
 level = "info"

@@ -31,4 +31,4 @@ line-profiler==4.1.1  # Line-by-line profiling
 
 # Security
 bandit==1.7.5  # Security issue scanner
-safety==2.3.5  # Dependency vulnerability checker
+safety==3.2.3  # Dependency vulnerability checker (2.x pins packaging<22, clashes with black)

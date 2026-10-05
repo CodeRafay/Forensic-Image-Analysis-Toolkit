@@ -1,311 +1,123 @@
-# 📈 Frequency Domain Analysis (FFT & DCT)
-
-## What is Frequency Domain Analysis?
-
-Frequency analysis examines images in "frequency space" rather than pixel space – like analyzing music by frequency (bass, treble) instead of by individual sound waves.
-
-**FFT (Fast Fourier Transform)** breaks down an image into frequency components, revealing how much "smoothness" vs. "detail" exists.
-
-**DCT (Discrete Cosine Transform)** analyzes JPEG compression patterns by looking at the coefficients JPEG uses internally.
-
-Think of it like:
-
-- **X-ray vision** that sees underlying structure instead of surface appearance
-- **Radio spectrum analyzer** showing what frequencies dominate
-- **Doctor's MRI** revealing what's happening inside rather than just looking at skin
-
-## What Does FFT Measure?
-
-- **Power-law slope** — real photographs lose detail at a characteristic rate
-  (a 1/f² falloff, slope near **-2.0**). This is the primary signal.
-- **High-frequency content** (sharp edges, details, noise) as a share of total power
-- **Low-frequency content** (smooth areas, gradients)
-- **Natural patterns** (how real images should look)
-
-> **Note on phase:** earlier versions scored "phase consistency". That metric was
-> removed because it is mathematically constant — the standard deviation of a
-> spectrum's phase converges to 1.814 for *every* image, so it never carried any
-> information. It is still reported under technical details, but not scored.
-
-## What Does DCT Measure?
-
-- **JPEG blockiness** — how much stronger edges are *on* the 8×8 grid than
-  elsewhere. 1.00 means no grid is visible.
-- **Compression artifacts** (quantization patterns)
-- **Frequency distribution** (smooth vs. detailed vs. noisy content)
-- **High-frequency anomalies** (sharpening, noise)
-- **Per-block texture energy** (shown as the block map)
-
-## How to Interpret Results
-
-### ✅ Normal FFT Patterns (Likely Authentic)
-
-1. **Balanced Frequency Content**
-
-   - Both high and low frequencies present
-   - Natural mix of detail and smoothness
-   - **Authenticity Score: 75+**
-
-2. **Natural Power-Law Falloff**
-
-   - Spectrum slope between **-3.0 and -1.5** (natural photos sit near -2.0)
-   - Detail fades with frequency the way real optics and sensors produce
-   - **Risk Level: Low**
-   - For reference: white noise measures ~0.0, a heavily blurred image ~-3.3
-
-3. **Smooth Spectral Distribution**
-   - No strange spikes or peaks
-   - Energy distributed naturally across spectrum
-   - **Interpretation**: "Natural image composition"
-
-### ⚠️ Suspicious FFT Patterns
-
-1. **Excessive High Frequencies**
-
-   - Too much sharpness and detail
-   - Over-sharpened filters applied
-   - **Authenticity Score: 45-60**
-   - **Warning**: "Artificial sharpening detected"
-
-2. **Abnormally Smooth (Low Frequencies)**
-
-   - Too much smoothing
-   - Over-processed or AI-generated
-   - **Risk Level: Medium/High**
-   - **Warning**: "Excessive smoothing or possible AI generation"
-
-3. **Spectrum Departs From the Power Law**
-   - Slope flatter than -1.5 → added noise, sharpening, or synthetic content
-   - Slope steeper than -3.0 → blur, heavy denoising, or upscaling
-   - **Verdict**: "Suspicious frequency characteristics"
-
-### ✅ Normal DCT Patterns (Likely Authentic)
-
-1. **Natural Content Mix**
-
-   - Smooth areas (%): 30-40
-   - Textures (%): 40-50
-   - Edges/Noise (%): 15-25
-   - **Score: 70+**
-
-2. **No Visible JPEG Grid**
-
-   - Blockiness ratio below **1.10** (1.00 = no grid at all)
-   - Edges on the 8×8 boundaries are no stronger than edges elsewhere
-   - Consistent with light or no recompression
-
-3. **Good Compression Quality**
-   - Quality indicator: 7-10
-   - No excessive quantization artifacts
-   - Clean frequency transitions
-
-### ⚠️ Suspicious DCT Patterns
-
-1. **Unnatural Content Distribution**
-
-   - Too much smoothness (>60% low-freq)
-   - Too much noise (>30% high-freq)
-   - **Score: 40-65**
-   - **Warning**: "Artificial content generation suspected"
-
-2. **Strong JPEG Grid**
-
-   - Blockiness ratio above **1.30**
-   - Edges line up on the 8×8 compression grid
-   - For reference: a clean photo measures ~1.01, the same photo resaved at
-     quality 50 measures ~1.23, and at quality 20 ~1.63
-   - Suggests heavy or repeated compression
-
-3. **Compression Artifacts**
-   - Excessive quantization patterns
-   - Grid-like artifacts visible
-   - **Anomaly**: "JPEG grid artifacts detected"
-   - Suggests multiple compressions or aggressive editing
-
-## Common Artifacts Detected
-
-### FFT Detects:
-
-1. **AI-Generated Content**
-
-   - Overly smooth, mathematically perfect patterns
-   - Power-law slope outside the natural -3.0 to -1.5 band
-   - **Authentic Score: 30-50**
-
-2. **Artificial Sharpening**
-
-   - Excessive high-frequency spikes
-   - Halos around edges
-   - **Warning**: "Over-sharpening detected"
-
-3. **Excessive Smoothing/Blurring**
-
-   - Suppressed high frequencies
-   - Plastic or artificial appearance
-   - **Warning**: "Artificial blur filter applied"
-
-4. **Splicing Effects**
-   - Different frequency components in different regions
-   - Spliced areas may carry a different power-law slope than the host image
-   - **Risk**: "Possible splicing detected"
-
-### DCT Detects:
-
-1. **Multiple JPEG Compressions**
-
-   - Block-level variance inconsistencies
-   - Layered quantization patterns
-   - **Anomaly**: "Multiple compression cycles detected"
-
-2. **Content-Aware Edits**
-
-   - Fill regions show different DCT patterns
-   - Filled areas often lack the host image's compression grid
-   - **Warning**: "Generated/filled content detected"
-
-3. **Unnatural Texture Distribution**
-
-   - Percentages outside natural ranges
-   - Too smooth or too noisy
-   - **Verdict**: "Possible synthetic content"
-
-4. **Selective Processing**
-   - Different blocks show different quality
-   - Suggests region-by-region editing
-   - **Anomaly**: "Region-specific compression detected"
-
-## Visual Examples
-
-### FFT Visualization Interpretation:
-
-```
-Natural Photo:          Over-Sharpened:         Over-Smoothed:
-  Bright ring            Spiky halo              Flat center
-  Center & edges mix     Extreme edges           Darkened edges
-  Balanced pattern       Concentrated at top     Concentrated at bottom
-```
-
-**Analysis**: Natural photo shows balanced energy; processed images show concentrated patterns
-
-### DCT Visualization Interpretation:
-
-**Left image** (DCT Coefficients):
-
-- Brightness = coefficient magnitude
-- Center = low frequencies (smooth)
-- Edges = high frequencies (detail)
-- **Natural**: Gradual brightness fall-off
-- **Suspicious**: Uneven or blocky patterns
-
-**Right image** (Block Texture Map):
-
-- Green = Flat, low-detail blocks
-- Yellow = Moderate texture
-- Red = High-detail blocks
-- This map shows **where the detail is**, mirroring the image's own content —
-  it is a texture overview, not a suspicion score. Sky reads green, foliage
-  reads red, and that is expected. Judge compression from the blockiness ratio
-  above, not from this map's colours.
-
-## Authenticity Scoring Explained
-
-### FFT Score (0-100):
-
-- **Power-Law Slope (0-50 pts)**
-  - 50 pts when the slope sits between -3.0 and -1.5
-  - 25 pts for a near miss, 0 for a sharp departure
-- **High-Frequency Content (0-50 pts)**
-  - 50 pts when 0.2%-3% of spectral power sits above half-Nyquist
-  - 20 pts when it is well below (over-smooth) or well above (noisy/sharpened)
-
-**Overall Scores:**
-
-- 80-100: Likely authentic
-- 60-79: Uncertain, requires other techniques
-- <60: Suspicious, possible manipulation
-
-For reference, measured on the bundled sample: an authentic photo scores **100**,
-a heavily blurred copy **45**, an oversharpened copy **45**, and pure noise **20**.
-
-### DCT Score (0-100):
-
-- **Frequency Distribution (0-30 pts)**
-- **High-Frequency Content (0-30 pts)**
-- **JPEG Blockiness (0-25 pts)** — 25 below 1.10, 15 below 1.30, 5 above
-- **Quantization Patterns (0-15 pts)**
-
-## Limitations
-
-### ⚠️ FFT Limitations
-
-1. **AI-Generated Detection Hard**
-
-   - Modern AI creates surprisingly natural-looking frequency patterns
-   - May pass FFT analysis even if synthetic
-
-2. **Compression Obscures Patterns**
-
-   - JPEG compression degrades frequency information
-   - Heavy compression can mask manipulation signs
-
-3. **Context-Dependent**
-
-   - Scene type affects natural frequency content
-   - Texture-heavy scenes naturally have high frequencies
-   - Sky-dominated scenes naturally smooth
-
-4. **False Positives**
-   - Artistic photography may have unusual patterns
-   - High-contrast scenes create edge artifacts
-
-### ⚠️ DCT Limitations
-
-1. **JPEG-Specific**
-
-   - Only works well on JPEG images
-   - PNG and other formats don't use DCT
-
-2. **Social Media Compression**
-
-   - Platforms recompress to near-invisibility
-   - Original DCT patterns destroyed
-
-3. **Professional Editing**
-
-   - Skilled editors can preserve natural DCT patterns
-   - Modern tools make DCT forgery easier
-
-4. **Multiple Sources**
-   - Can't always identify source of edited regions
-   - Just shows _that_ editing occurred
-
-## Best Practices
-
-✔️ **Use both FFT and DCT** for comprehensive analysis  
-✔️ **Consider image type** (what should this scene look like?)  
-✔️ **Look at specific regions** (is whole image suspicious or just parts?)  
-✔️ **Compare authenticity score** with other techniques  
-✔️ **Examine visualizations** for obvious anomalies  
-✔️ **Check warnings** for specific issues detected  
-✔️ **Read interpretations** for context-aware analysis  
-✔️ **Remember: These are supporting tools**, not definitive proof
-
-## Key Questions to Ask
-
-### FFT:
-
-1. Is the authenticity score above 75?
-2. Do the findings show mostly ✓ (normal) or ⚠ (suspicious) items?
-3. Are warnings specific to known manipulation types?
-4. Does the interpretation match what you see visually?
-
-### DCT:
-
-1. Are the content percentages in natural ranges?
-2. Is the JPEG blockiness ratio below 1.10?
-3. Do anomalies make sense for this image source?
-4. Are there signs of multiple compressions?
-
----
-
-_Frequency analysis is like X-ray vision for images – it reveals underlying structure and patterns invisible to the eye. Combined with visual analysis and other techniques, FFT and DCT provide powerful evidence for authentication or manipulation detection._
+# Frequency Analysis (power spectrum and JPEG block grid)
+
+Code: `analysis/frequency_analysis.py`, with the grid helpers in `analysis/util.py`.
+Entry points: `analyze_spectrum(path)`, `analyze_blocking(path)`.
+
+## 1. Power spectrum: `analyze_spectrum`
+
+In natural images, power falls off roughly as 1/f^2 (Field 1987; Torralba and
+Oliva 2003). The code:
+
+1. Takes the luminance at full resolution and cuts a centre square crop of at
+   most 2048 px. Cropping keeps the spectrum; resizing would change it.
+2. Subtracts the mean and applies a 2-D Hann window. Because of the mean
+   subtraction, a brightness shift no longer changes the result (it used to
+   move HF% from 1.06 to 0.24).
+3. Radially averages |FFT|^2 and fits the log-log **slope** on 24
+   log-spaced frequency bins, so each octave counts equally (a fit over every
+   radius is dominated by the high-frequency end, where most radii lie and
+   noise / JPEG sets the level). A synthetic 1/f^2 image reads about -1.8,
+   1/f^3 about -2.9. It also reports the share of power above half-Nyquist
+   (**HF share**).
+4. Returns `insufficient_data` for images under 16 px or uniform images.
+
+Both numbers are measurements. A value outside the range measured on unedited
+photos gives only a *notice*. There is no score and no verdict.
+
+Calibration set: sample + 8 skimage photos + 8 camera-pipeline scenes (Bayer
+mosaic, shot/read noise, OpenCV demosaic, some sharpened), each as PNG and
+JPEG q70/85/95 (68 cases): slope -3.01 to -1.08, HF 0.19 to 28.6 %.
+
+| Metric | Notice when |
+|---|---|
+| Spectral slope | < -3.5 or > -1.0 |
+| Power above half-Nyquist | < 0.05 % or > 30 % |
+
+Hold-out (6 other skimage images, 8 other camera seeds):
+
+| Case | Notice |
+|---|---|
+| Unedited (60) | 8/60 = 13 % (all versions of `cat`, slope -4.3, and `colorwheel`, HF 0.02 %) |
+| Gaussian blur sigma 1.5 | 13/15 |
+| 2x bicubic upscale | 3/15 |
+| Gaussian noise sigma 8 | 0/15 |
+
+The notice is weak: one in eight clean images of an unusual scene (smooth,
+out of focus, flat graphics) triggers it. Only strong blur is reliably seen.
+
+Bundled sample: slope -2.19, HF share 5.4 %.
+
+Images: the log power spectrum, and the radial profile with its fit.
+
+Limitations: scene content (sky vs foliage, focus) moves both numbers as much
+as editing does. Upscaling, sharpening and added noise usually stay inside
+the range. A whole-image spectrum cannot localise an edit.
+
+## 2. JPEG block grid: `analyze_blocking`
+
+Method: W. Li, Y. Yuan and N. Yu, "Passive detection of doctored JPEG image via
+block artifact grid extraction", Signal Processing 89(9), 2009.
+
+1. **BAG extraction** (`util.bag_maps`)
+   - Takes second-order differences |2f(x) - f(x-1) - f(x+1)| across each
+     column and row gap. The two pixels either side of a gap are summed, so
+     the grid phase is unambiguous.
+   - Sets values above an adaptive threshold T = max(4, 8 x median) to zero,
+     which removes object edges.
+   - Accumulates the rest over 33 px along the boundary, then subtracts a
+     33-px running median across it.
+2. **Global grid** (`util.jpeg_grid_offset`)
+   - Computes the energy for each phase 0-7 on each axis.
+   - Strength = (best / second-best phase on x) x (best / second-best on y).
+     A grid is reported when strength >= 1.4.
+   - A grid origin (x, y) other than (0, 0) gives an *info* finding. It is
+     consistent with (8 - x) mod 8 columns and (8 - y) mod 8 rows removed
+     from the left/top after compression, or with the image itself being a
+     pasted JPEG region.
+   - A PNG that carries a grid is noted as having been JPEG-compressed before.
+3. **Upscale vs grid**
+   - The autocorrelation of the |first difference| profile (lags 2-32) is
+     reported when it is >= 0.5.
+   - A period other than 8 is reported as upscaling/resampling, not as a JPEG
+     grid.
+   - A nearest-neighbour 2x upscale gives equal peaks at 4 phases, so its grid
+     strength is about 1.
+4. **Local grid** (only when a global grid exists)
+   - Uses 64x64 windows on a 32-px step.
+   - A window is misaligned when its strongest phase pair differs from the
+     global one and beats the global phase by 2x on some axis.
+   - 5 or more touching windows with the **same** phase pair give a
+     *warning*: texture produces random phases, a pasted JPEG produces one
+     consistent phase.
+   - A second grid covering >= 50 % of the image gives a *notice* instead: the
+     whole image was cropped and recompressed.
+
+Images:
+- BAG map.
+- Local alignment heatmap: green = aligned, red = another phase dominates,
+  dark = no measurable grid.
+
+Metrics: grid strength, grid origin, periodicity x / y, misaligned area %.
+
+### Measured performance (16 photos, seeded)
+
+| Case | Result |
+|---|---|
+| Never-compressed, NN 2x and bicubic 1.5x images | 0/48 false grids |
+| Cropped JPEG, grid found with the correct crop offset, at q50 / 60 / 70 / 80 / 90 / 95 | 15 / 15 / 14 / 12 / 9 / 5 of 16 (73 %) |
+| Periodicity reported on clean photos / NN 2x / NN 3x / bilinear 2x | 0 / 16 / 16 / 10 of 16 |
+| Local warning on clean cropped JPEGs q50-95 | 2/48 (both are the bundled sample, itself a q95 JPEG, so the crop created a real second grid) |
+| Patch from a q50-80 JPEG pasted off-grid into a q70-95 JPEG, localised, saved at q95 / q100 / as PNG | 6 / 7 / 8 of 16 (44 %) |
+
+Bundled sample: grid at (0, 0), strength 1.83, no local inconsistency.
+
+### Limitations
+
+- At quality >= 90 the grid is weak and often not measurable, especially in
+  small or smooth images.
+- Resizing, rotation, filtering or noise after compression erase the grid. An
+  image with no measurable grid may still have been a JPEG.
+- A pasted region is visible only if it carries its own grid at a different
+  phase and was not recompressed at a lower quality afterwards. Final saves
+  at q <= 90 hide it.
+- Flat regions have no measurable local grid.

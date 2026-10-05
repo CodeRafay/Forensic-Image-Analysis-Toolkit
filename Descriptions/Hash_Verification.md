@@ -1,325 +1,113 @@
-# 🔑 Cryptographic Hash Verification
+# Hash Ledger (file identity and visual similarity)
 
-## What is Hash Verification?
+## What it does
 
-Hash verification is like creating a **digital fingerprint** for an image. Just as your fingerprint uniquely identifies you, a cryptographic hash uniquely identifies a specific file. This module uses two types of hashing:
+You add images to a **ledger** kept for this browser session. Later you
+check another image against it. Three kinds of comparison are made, from
+strongest to weakest:
 
-1. **Cryptographic Hash (SHA-256)**: Exact matching - even one bit changed creates a completely different hash
-2. **Perceptual Hash**: Resilient matching - similar images produce similar hashes
+| Test | What equal values mean | What it misses |
+|---|---|---|
+| **SHA-256 of the file bytes** | The two files are byte-identical. This is the only identity test. | Nothing about the earlier file: if it was already edited when you added it, the match still holds. |
+| **Pixel SHA-256** (decoded pixels + mode + size + palette) | Same pixels, but the file bytes differ, so metadata or container changed (EXIF stripped, PNG chunks rewritten, re-wrapped). | EXIF orientation and all other metadata. |
+| **pHash / dHash / aHash** (64-bit perceptual hashes, `imagehash`) | The images *look* similar. | Local edits. See the benchmark below. **Not evidence of integrity.** |
 
-Think of it like DNA testing:
-- **Cryptographic hash** = Exact DNA match (100% identical twins)
-- **Perceptual hash** = Family resemblance (siblings look similar)
+SHA-512 and MD5 are also computed and shown. MD5 is **legacy**: collisions
+can be generated on purpose, so use it only to compare against old records.
 
-## What is Blockchain-Based Provenance?
+## Reading the result
 
-**Provenance** means the history of ownership and modifications of an image. Our
-ledger:
+Findings:
 
-- **Records every registered image** with timestamps
-- **Creates an append-only audit trail** (like a notary's ledger)
-- **Tracks the chain of custody** for legal validity
-- **Detects unauthorized modifications** by comparing hashes
+- **info, "Byte-identical (SHA-256) to record #n (label, date)"**: the file
+  is exactly the one you added as record n.
+- **notice, "Pixels identical … file bytes differ"**: same picture data,
+  different file. Something outside the pixels changed.
+- **notice, "Visually similar … (pHash distance d)"**: the image looks like
+  record n. It may be a recompressed or resized copy, **or a locally edited
+  one**. The hash cannot tell which.
+- **info, "Not in this session's ledger"**: no file, pixel or perceptual match.
+- **warning, "Ledger hash chain is broken at record index k"**: records from
+  k onward were changed after being added. Matches against them are unreliable.
 
-> 📌 **"Blockchain" here means a local hash chain, not a distributed ledger.**
-> There is no network and no consensus — but the chaining is real. Each record
-> stores the hash of the record before it, so editing any entry is detected.
-> What it cannot do is stop someone deleting the file and starting over; for
-> that you would need an external anchor (a notary, a public chain, or an
-> append-only server).
+Metrics:
 
-### How It Works:
+- counts of byte-identical, pixel-identical and visually similar records
+- best pHash / dHash / aHash Hamming distance (bits that differ, out of 64;
+  0 = same hash)
+- the similarity threshold in use (10 bits of pHash)
 
-Each record's hash covers both its own contents **and** the previous record's
-hash, so the entries form a chain:
+Tables: *Top matches* (up to 10 records, strongest first, with all three
+distances) and *Query hashes* (every hash of the checked image).
 
-```
-Original Image → Generate Hashes → Append to chain → Verify Later
-                                          ↓
-              Timestamp + Hashes + Metadata + prev_hash → record_hash
-```
+## Benchmark (how the 10-bit threshold was chosen)
 
-```
-record 0            record 1            record 2
-prev: 0000…         prev: hash(0)       prev: hash(1)
-hash: hash(0)  ───► hash: hash(1)  ───► hash: hash(2)
-```
+Reference: `assets/sample images/sampleImg.jpeg` (1024x576). Unrelated images
+come from scikit-image. Seed 0.
 
-Editing any field of record 1 changes what its hash *should* be, which no
-longer matches the hash stored in it. And if someone recomputes record 1's
-hash to cover their tracks, record 2's `prev_hash` no longer matches — the
-break simply moves one step down the chain. Either way the tampering surfaces.
+| Case | pHash distance | Counted as similar (<= 10) |
+|---|---|---|
+| Recompress JPEG q20-95, resize 0.25-2x, grayscale (16 cases) | 0 for every case | 16 / 16 |
+| Unrelated images vs sample (12) and vs each other (152 pairs) | min 20 | 0 / 164 |
+| Copy-paste splice 32 px (6 trials, saved q90) | 0-4 | 6 / 6 |
+| Splice 48 px | 0-2 | 6 / 6 |
+| Splice 64 px | 0-8 | 6 / 6 |
+| Splice 100 px | 4-12 | **5 / 6** |
+| Splice 150 px | 2-10 | 6 / 6 |
 
-When you later verify an image, it compares current hashes with stored records to determine authenticity.
+dHash and aHash behave the same way: splices stayed within 0-8 and 0-2 bits.
+So a perceptual match **cannot** tell a recompressed copy from a copy with
+a pasted-in region. That is why a perceptual match is only ever a *notice*.
+It is never reported as integrity.
 
-## Types of Hashing Used
+## The ledger and its hash chain
 
-### 1. 🔒 Cryptographic Hash (SHA-256)
+Each record holds `id`, `created_utc`, `label` (the display name you give it,
+never a server path), `note`, `hashes`, `prev_hash` and `record_hash`.
+`record_hash` is the SHA-256 of the record's canonical JSON (sorted keys,
+without `record_hash` itself). `prev_hash` is the previous record's
+`record_hash`; the first record uses 64 zeros.
 
-**Purpose**: Exact integrity verification
+`verify_chain` walks the records in order. Editing one record breaks its own
+hash. If you recompute that one hash, the next record's `prev_hash` breaks
+instead. **But anyone who edits a record and recomputes every hash after it
+gets a consistent chain again.** The chain catches accidental or partial
+edits, not deliberate ones.
 
-- **How it works**: Processes every single bit of the file
-- **Length**: 256 bits (64 hexadecimal characters)
-- **Collision resistance**: Virtually impossible to find two different images with same hash
-- **Sensitivity**: Changing even ONE pixel completely changes the hash
+## Export and import
 
-**Use Cases**:
-- Legal evidence verification
-- Exact duplicate detection
-- Tamper detection
-- Digital chain of custody
+`export_ledger` writes JSON: `{"format": "veritas-ledger/1", "exported_utc",
+"records", "signature"}`. The signature covers the canonical JSON of
+everything except itself:
 
-### 2. 👁️ Perceptual Hash (pHash, aHash, dHash, wHash)
+- **With a server secret** (`LEDGER_KEY`): HMAC-SHA256. Only people who hold
+  the key can produce a file that verifies. An edited and re-hashed file
+  fails, and so does a file downgraded to a plain digest.
+- **Without a secret**: a plain SHA-256 digest, marked *integrity-only*. It
+  catches accidental change, such as a corrupted download. Anyone can edit
+  the file and recompute the digest, and the import cannot detect that. The
+  import report says so.
 
-**Purpose**: Find similar images despite minor changes
-
-**pHash (Perceptual Hash)**:
-- Most robust against modifications
-- Based on discrete cosine transform (DCT)
-- Resistant to: compression, resizing, color adjustment
-
-**aHash (Average Hash)**:
-- Fast and simple
-- Based on average pixel values
-- Good for basic similarity matching
-
-**dHash (Difference Hash)**:
-- Based on gradient between adjacent pixels
-- Resistant to gamma correction and color changes
-
-**wHash (Wavelet Hash)**:
-- Uses wavelet transform
-- Good for texture similarity
-
-**Common Tolerances**:
-- 0-5 bits different: Nearly identical (minor compression/resize)
-- 6-10 bits different: Very similar (moderate edits)
-- 11-15 bits different: Similar (significant edits)
-- 16+ bits different: Possibly different images
-
-## What Does the Analysis Show?
-
-### 📊 Authenticity Score (0-100)
-
-- **100**: Exact cryptographic match - identical file
-- **85-99**: Strong perceptual match - minor modifications only
-- **70-84**: Moderate match - some modifications detected
-- **55-69**: Weak match - significant changes
-- **0-54**: No match or unknown provenance
-
-### 🔍 Match Types
-
-**Exact Match**:
-- SHA-256 hashes identical
-- Byte-for-byte identical file
-- Highest confidence (100%)
-
-**Perceptual Match**:
-- SHA-256 differs, but perceptual hashes similar
-- Indicates modifications like:
-  - Format conversion (PNG → JPEG)
-  - Compression level change
-  - Minor cropping or resizing
-  - Color adjustment
-  - Watermark addition
-
-**No Match**:
-- Neither cryptographic nor perceptual match
-- Unknown provenance
-- Possibly original (never registered)
-
-### ⚖️ Legal Validity Assessment
-
-**Chain of Custody**: Critical for legal admissibility
-
-- **Intact**: Exact match found, high legal validity
-- **Likely Intact**: Minor modifications only, still admissible
-- **Questionable**: Moderate modifications, requires explanation
-- **Broken**: Significant changes, likely not admissible
-
-## Interpretation Guidelines
-
-### ✅ High Authenticity (Score: 85-100)
-
-**Indicators**:
-- Exact SHA-256 match OR
-- Perceptual hash distance < 5 bits
-- Clear modification history in database
-- Timestamps match expected timeline
-
-**Confidence**: High - Image is authentic or minimally modified
-
-### 🟡 Medium Authenticity (Score: 55-84)
-
-**Indicators**:
-- Perceptual hash distance 5-15 bits
-- Moderate modifications detected
-- Some inconsistencies in timeline
-- Format or size changes
-
-**Confidence**: Medium - Image may be authentic but edited
-
-### 🔴 Low Authenticity (Score: 0-54)
-
-**Indicators**:
-- No perceptual match in database
-- Hash distance > 15 bits
-- Unknown provenance
-- Possible forgery or new image
-
-**Confidence**: Low - Cannot verify authenticity
-
-## Database Management
-
-### Adding Images to Blockchain
-
-When you add an image:
-1. Generates all hash types (SHA-256, pHash, aHash, dHash, wHash)
-2. Records timestamp (ISO 8601 format)
-3. Stores file metadata (size, dimensions, format)
-4. Creates immutable record in JSON "blockchain"
-
-### Searching the Database
-
-When you verify an image:
-1. Generates current hashes
-2. Searches database for matches
-3. Calculates similarity scores
-4. Returns modification history
-
-### Import/Export Functionality
-
-**Export**: Save database to share with other systems  
-**Import**: Load trusted database (merge or replace)  
-**Backup**: Regular exports for disaster recovery
-
-## Use Cases
-
-### Digital Forensics:
-- **Evidence verification**: Prove image hasn't been tampered
-- **Chain of custody**: Track image from capture to court
-- **Timeline establishment**: Verify when image was created
-- **Duplicate detection**: Find all versions of an image
-
-### Copyright Protection:
-- **Proof of ownership**: Establish creation date
-- **Infringement detection**: Find unauthorized copies
-- **Licensing verification**: Confirm licensed versions
-
-### Journalism & Media:
-- **Source verification**: Confirm image origin
-- **Deepfake detection**: Check against known authentic images
-- **Archive integrity**: Ensure historical images unchanged
-
-### Corporate Security:
-- **Data leak prevention**: Track sensitive images
-- **Insider threat detection**: Monitor unauthorized distribution
-- **Compliance auditing**: Verify document integrity
-
-## Technical Implementation
-
-### Hash Generation:
-```
-Image File → SHA-256 → Cryptographic Hash (exact)
-           → pHash  → Perceptual Hash (similarity)
-           → aHash  → Average Hash (fast similarity)
-           → dHash  → Difference Hash (gradient)
-           → wHash  → Wavelet Hash (texture)
-```
-
-### Similarity Calculation:
-- **Hamming Distance**: Counts differing bits between hashes
-- **Lower distance** = More similar images
-- **Threshold**: Typically 10 bits for "similar" classification
-
-### Ledger:
-- **JSON-based storage**: Simple, portable database
-- **Hash-chained**: Each entry carries `prev_hash` and `record_hash`, so edits
-  to any record are detected by `verify_chain()`
-- **Chronological ordering**: Establishes timeline
-- **Metadata included**: Full context for each image
-- **Verified on every lookup**: A compromised chain overrides any image match —
-  a match against an altered ledger proves nothing, so the verdict becomes
-  "Chain of custody: Compromised / not admissible"
+Import refuses to merge a file if its signature fails, its digest fails, or
+its chain is inconsistent. When merging into the current ledger, each new
+record is **re-linked** onto the tail: its old hash is kept as
+`original_record_hash`, it gets a new `id` and `prev_hash`, and its
+`record_hash` is recomputed. Records whose SHA-256 already exists are
+skipped. The merged ledger's chain stays valid.
 
 ## Limitations
 
-### 1. **A Local Hash Chain, Not a Distributed Ledger**
-- Cryptographically chained: edits to any record are detected
-- But local — no network, no consensus, no independent witnesses
-- **Wholesale replacement is still possible**: nothing stops someone deleting
-  the file and rebuilding a fresh, internally-consistent chain
-- Defeating that needs an external anchor — publishing the chain head to a
-  public blockchain, a timestamping authority, or an append-only server
-
-### 2. **Perceptual Hash Limitations**
-- Cannot detect all modifications
-- Advanced forgery can fool perceptual hashing
-- Threshold selection affects accuracy
-
-### 3. **Database Security**
-- JSON file can be manually edited (in theory)
-- No built-in tamper protection
-- Should be stored securely with access controls
-
-### 4. **Initial Registration Required**
-- Images must be registered BEFORE verification
-- Cannot verify previously unknown images
-- Empty database = no verification possible
-
-### 5. **Storage Considerations**
-- Database grows with each registered image
-- Regular backups recommended
-- Export/import for database migration
-
-## Best Practices
-
-✔️ **Register images immediately** upon capture/creation  
-✔️ **Regular database backups** to prevent data loss  
-✔️ **Secure database storage** with restricted access  
-✔️ **Document all modifications** when editing registered images  
-✔️ **Use exact match** for legal evidence (SHA-256)  
-✔️ **Use perceptual match** for finding similar versions  
-✔️ **Export database** before sharing with external parties  
-✔️ **Verify timestamps** match expected timeline  
-✔️ **Cross-reference** with other forensic techniques
-
-## Legal and Ethical Considerations
-
-### Admissibility in Court:
-- **Chain of custody** must be documented
-- **Exact hash match** provides strong evidence
-- **Modification history** must be explained
-- **Database integrity** must be proven
-
-### Privacy Concerns:
-- Hash databases may contain sensitive information
-- Follow data protection regulations (GDPR, etc.)
-- Obtain proper authorization before hashing images
-
-### Ethical Use:
-- Don't use for unauthorized surveillance
-- Respect copyright and intellectual property
-- Maintain transparency in forensic analysis
-
----
-
-## Educational Context
-
-This module demonstrates critical **Information Security** concepts:
-
-- **Cryptographic Integrity**: Using hashes for verification
-- **Digital Provenance**: Tracking asset history
-- **Blockchain Technology**: Immutable audit trails
-- **Similarity Detection**: Perceptual vs. exact matching
-- **Legal Admissibility**: Chain of custody requirements
-
-**Real-World Application**: Similar systems are used by:
-- Law enforcement for digital evidence
-- Content platforms for copyright detection (YouTube Content ID)
-- News organizations for image verification
-- Blockchain projects for NFT authenticity
-
----
-
-_Hash verification is a cornerstone of digital forensics. Understanding both cryptographic and perceptual hashing enables comprehensive image authentication and provenance tracking._
+- **Session-only storage.** The ledger lives in this browser session and is
+  cleared when the session ends. Export it to keep it. Visitors never see
+  each other's ledgers.
+- The in-session chain only catches accidental or partial edits (see above).
+- Without a server secret, an export is checked only against accidental
+  change. With HMAC, a valid file shows only that a key holder produced it.
+- `created_utc` is this server's clock, not a trusted timestamp. This is not
+  a legal chain of custody. The real mechanisms for that are an **RFC 3161
+  Time-Stamp Authority** (trusted timestamps) and **C2PA Content
+  Credentials** (signed provenance embedded in the file).
+- A byte-identical match says nothing about what happened to the image
+  before it was first added.
+- Perceptual hashes cannot separate local edits from recompression.
+- Pixel SHA-256 ignores metadata, including EXIF orientation.

@@ -18,6 +18,8 @@
 **Author:**  
 Rafay Adeel
 
+**Version:** 3.0.0 (September 2026)
+
 </div>
 
 <br>
@@ -60,156 +62,178 @@ Rafay Adeel
 
 ## 3. Introduction
 
-The credibility of digital imagery is a critical concern in journalism, criminal investigations, intelligence analysis, and everyday social media use. With the increasing sophistication of image editing tools and the proliferation of AI-generated content, traditional forms of visual verification have become inadequate. As a result, **Digital Image Forensics** has emerged as a specialized discipline aimed at examining images for authenticity, origin, and integrity.
+The credibility of digital imagery matters in journalism, investigations and
+everyday social-media use. Editing tools and generative models make visual
+inspection inadequate, and **digital image forensics** studies the traces
+that capture, compression and editing leave in an image file.
 
-**Veritas Forensics** is a digital image analysis toolkit developed as a semester project to provide a practical, hands-on platform for exploring forensic techniques. The application consolidates common forensic workflows—such as metadata inspection, error level analysis, noise pattern analysis, and frequency-domain inspection—into a single, web-based interface built with Streamlit. This report documents the motivation, design, and implementation of the system.
+**Veritas Forensics** is a toolkit, begun as a semester project, that puts a
+set of published forensic techniques behind one Streamlit web interface.
+Version 3.0.0 rebuilt every technique on a published method with thresholds
+calibrated on seeded synthetic benchmarks. This report documents the
+motivation, design and implementation.
+
+> Every result the toolkit shows is an **indicator, not proof**. It reports
+> what each test measured; it never certifies an image as unedited.
 
 ## 4. Purpose of the Project
 
-The primary purpose of Veritas Forensics is to support **semi-automated forensic analysis of digital images** in an accessible manner. Rather than replacing experts, the toolkit is designed to augment human judgment by:
+Veritas supports **semi-automated forensic screening** of single images.
+Rather than replacing experts, it:
 
-- Providing visualizations that make subtle artifacts easier to detect.
-- Offering structured access to multiple forensic perspectives on the same image.
-- Serving as an educational resource for students and practitioners who are new to image forensics.
-
-By open-sourcing the toolkit, we further aim to encourage experimentation and extension by the research and academic community.
+- visualises traces that are hard to see (error levels, noise levels,
+  duplicated regions, compression grids);
+- offers several independent forensic perspectives on the same image;
+- serves as an educational resource, with an in-app guide per technique
+  that states the method, the measured detection and false-alarm rates, and
+  the limitations.
 
 ## 5. Problem Statement
 
-The project addresses the following core problem:
+> **How can a unified, intuitive platform let users run several published
+> image-forensics techniques without deep expertise, while being honest about
+> what each result can and cannot show?**
 
-> **How can we provide a unified, intuitive platform that enables users to perform multi-technique digital image forensic analysis without requiring deep expertise in image processing or programming?**
+Challenges:
 
-Specific challenges include:
-
-1. **Fragmentation of Tools**: Many forensic algorithms exist only as research prototypes, scripts, or standalone command-line tools.
-2. **Usability Barriers**: Non-technical users often struggle to install dependencies, understand parameters, and interpret raw numerical outputs.
-3. **Rapid Evolution of Threats**: As generative models and editing tools advance, forensic methods must be continuously evaluated and combined.
-
-Veritas Forensics seeks to mitigate these issues by integrating a curated set of well-established forensic techniques into a cohesive toolkit with an emphasis on usability and interpretability.
+1. **Fragmentation**: many algorithms exist only as research code.
+2. **Usability**: raw numbers are hard to interpret without guidance.
+3. **Overclaiming**: forensic tools are easily read as verdicts. A single
+   "authenticity score" hides that each test sees only one kind of trace.
 
 ## 6. Objectives
 
-The objectives of the project are:
-
-1. **Integration Objective**: Combine multiple digital image forensic techniques (ELA, metadata analysis, histogram inspection, noise analysis, and frequency-domain inspection) into a single Streamlit application.
-2. **Usability Objective**: Design an interface that allows a first-time user to upload an image and run at least one analysis within a minute.
-3. **Educational Objective**: Provide in-application descriptions, examples, and interpretive hints for each forensic technique via the `Descriptions/` module.
-4. **Technical Objective**: Implement modular, testable Python code for each analysis routine following best practices.
-5. **Performance Objective**: Ensure responsiveness for typical image sizes used on the web (up to ~12 megapixels) on commodity hardware.
+1. **Integration**: combine compression, metadata/provenance, pixel-statistic,
+   geometric, sensor and steganalysis techniques in one Streamlit app.
+2. **Usability**: a first-time user can run an analysis within a minute (a
+   sample image is preloaded).
+3. **Education**: an in-app description per technique (`Descriptions/`).
+4. **Rigour**: each technique implements a published method; each decision
+   threshold is calibrated on a seeded benchmark to a stated false-alarm rate.
+5. **Honesty**: report measurements and "inconsistency found / not found",
+   never "authentic".
 
 ## 7. Scope of the Project
 
-The scope is intentionally focused to maintain feasibility within a semester:
+**Included**
 
-**Included in Scope**
+- Static **JPEG and PNG** images (the uploader accepts `.jpg`, `.jpeg`, `.png`).
+- Thirteen tabs: ELA, Metadata & C2PA, Histogram, Noise, JPEG (quantization
+  tables, double-JPEG, ghosts), Copy-Move, PRNU, Frequency (spectrum, block
+  grid), Resampling, Synthetic traces (Experimental), Steganography, Hash
+  ledger, About.
+- A per-session hash ledger with signed export/import.
 
-- Analysis of **static images** (JPEG, PNG, TIFF) only.
-- A set of **classical forensic techniques**: Error Level Analysis, metadata extraction, histogram analysis, noise-based inspection, and frequency analysis.
-- A **web-based front end** using Streamlit with a sidebar for navigation between techniques.
-- Sample images and preloaded configurations for demonstration and teaching.
+**Excluded**
 
-**Excluded from Scope**
-
-- Video forensics and audio analysis.
-- Automated deepfake detection using large neural networks.
-- Full case management features (e.g., chain-of-custody, report generation in legal formats).
+- Video and audio forensics.
+- Trained deep-learning detectors (the synthetic-traces tab is a fixed
+  spectral measurement with no verdict).
+- Case management, trusted timestamping and legal chain of custody.
 
 ## 8. Literature Review
 
-The design of Veritas Forensics draws inspiration from established academic work in digital image forensics.
-
-1. **JPEG Compression and Error Level Analysis (ELA)**  
-   Krawetz (2007) discussed the use of _Error Level Analysis_ as a heuristic to reveal regions of an image that have undergone different levels of compression. Because JPEG is lossy, repeatedly saving an image at the same quality should lead to relatively uniform error across the image. Regions that were inserted or heavily edited may exhibit different error characteristics, appearing as brighter or darker zones in an ELA visualization.
-
-2. **Forensic Analysis in the Frequency Domain**  
-   Fridrich, Soukal, and Lukáš (2003) and subsequent works have examined the impact of resampling, scaling, and rotation on the periodic structure of images. These operations often introduce detectable periodicities and patterns in the Discrete Fourier Transform (DFT) or Discrete Cosine Transform (DCT) domains. Peaks and regular patterns in the magnitude spectrum are frequently associated with copy-move forgeries and resampling artifacts.
-
-3. **Metadata and Device Forensics**  
-   Research by Kee et al. and others has highlighted the importance of **Exchangeable Image File Format (EXIF)** metadata for forensics. Inconsistencies between embedded thumbnails, capture timestamps, camera model identifiers, and software tags can provide strong circumstantial evidence that an image has been edited. For instance, an EXIF tag indicating "Adobe Photoshop" may be suspicious when the context implies an original, unedited photograph.
-
-4. **Noise Patterns and Sensor Fingerprints**  
-   Mahdian and Saic (2009) and Lukáš et al. emphasized the role of **Photo-Response Non-Uniformity (PRNU)**, a unique noise pattern associated with individual camera sensors. While Veritas Forensics does not implement full PRNU-based source attribution, it adopts the principle that noise statistics can reveal inconsistencies between regions of an image, and leverages local noise estimation as a basic diagnostic.
-
-5. **Comprehensive Surveys**  
-   Survey papers in digital image forensics (e.g., Farid, 2009; Stamm, Wu, & Liu, 2013) underscore that no single technique is universally reliable. Instead, robust analysis comes from synthesizing evidence across multiple domains (spatial, frequency, metadata, noise). This motivates the toolkit’s multi-module design.
+1. **JPEG compression.** Krawetz (2007) introduced Error Level Analysis.
+   Farid (2009) showed that recompressing at a range of qualities exposes
+   regions previously compressed at a lower quality ("JPEG ghosts"). Bianchi &
+   Piva (2012) model DCT coefficient histograms of doubly compressed JPEGs to
+   localize singly compressed (pasted) blocks. Li, Yuan & Yu (2009) extract
+   the 8×8 block artifact grid, whose misalignment reveals cropping or pasted
+   JPEG regions.
+2. **Resampling.** Popescu & Farid (2005) and Kirchner (2008) showed that
+   interpolation leaves periodic correlations; Kirchner's fixed linear
+   predictor makes detection fast, and Kirchner & Gloe (2009) handle the JPEG
+   peaks that otherwise mimic resampling.
+3. **Copy-move.** Amerini et al. (2011, 2013) match SIFT keypoints within an
+   image and fit affine transforms; Cozzolino, Poggi & Verdoliva (2015) use a
+   dense PatchMatch field over rotation-invariant Zernike features.
+4. **Noise and sensor fingerprints.** Lukáš, Fridrich & Goljan (2006)
+   introduced PRNU camera identification; Chen et al. (2008) added a
+   correlation predictor for integrity checking and Goljan et al. (2009) the
+   PCE statistic; Chierchia et al. (2014) localise splices with an MRF.
+   Cozzolino, Poggi & Verdoliva (2015, Splicebuster) expose splices from
+   inconsistent noise-residual co-occurrence statistics.
+5. **Pixel statistics.** Stamm & Liu (2010) detect contrast enhancement from
+   the histogram's high-frequency energy.
+6. **Metadata and provenance.** Kee, Johnson & Farid (2011) used JPEG headers
+   to identify the last encoder. The C2PA standard (2.x) adds signed
+   Content Credentials, the only cryptographic provenance signal the toolkit
+   reads.
+7. **Steganalysis.** Westfeld & Pfitzmann (1999), Fridrich et al. (2001),
+   Dumitrescu et al. (2003) and Ker & Böhme (2008) give statistical and
+   quantitative LSB-replacement detectors.
+8. **Synthetic images.** Durall et al. (2020) and Corvi et al. (2023) report
+   spectral peaks left by generator upsampling; modern generators and
+   post-processing often remove them.
+9. **Surveys** (Farid 2016; Stamm, Wu & Liu 2013; Verdoliva 2020) stress that
+   no single technique is reliable alone, which motivates the multi-module
+   design and the absence of a combined score.
 
 ## 9. System Requirements
 
-To deploy and run Veritas Forensics, the following system requirements are recommended:
+- **OS**: Windows 10/11, macOS or a modern Linux distribution.
+- **Python**: 3.10 (pinned in `.python-version`).
+- **Libraries** (pinned in `requirements.txt`): `streamlit`, `numpy`,
+  `scipy`, `scikit-image`, `opencv-python-headless`, `Pillow`, `PyWavelets`,
+  `matplotlib`, `piexif`, `ImageHash`, `c2pa-python`.
 
-- **Operating Systems**: Windows 10/11, macOS 10.14+, or a modern Linux distribution.
-- **Python Version**: Python 3.9 or later.
-- **Installed Libraries** (via `requirements.txt`):
-  - `streamlit`
-  - `opencv-python`
-  - `numpy`
-  - `Pillow`
-  - `scipy`
-  - `matplotlib` or `plotly`
-
-Network connectivity is required only for installing dependencies and, optionally, for deploying on cloud platforms such as Streamlit Community Cloud or Heroku.
+Network access is needed only to install packages or deploy. C2PA reading
+runs offline (no remote manifest or OCSP fetches).
 
 ## 10. Functional Requirements
 
-1. **FR-01 Image Ingestion**: The system shall allow users to upload image files (JPEG, PNG, TIFF) through a browser-based interface.
-2. **FR-02 Sample Image Loading**: The system shall automatically load a default sample image if the user does not upload one, enabling immediate experimentation.
-3. **FR-03 Technique Navigation**: The user shall be able to select an analysis module (ELA, Metadata, Histogram, Noise, Frequency, etc.) from the sidebar.
-4. **FR-04 Parameter Adjustment**: For applicable techniques (e.g., ELA quality, histogram bin size), the system shall provide controls such as sliders or dropdowns to adjust parameters.
-5. **FR-05 Result Visualization**: The system shall display visual outputs (processed images, heatmaps, histograms, magnitude spectra) within the same page.
-6. **FR-06 Textual Explanations**: The system shall present textual summaries or interpretations alongside visual outputs to guide novice users.
-7. **FR-07 Technique Descriptions**: The system shall provide separate, detailed descriptions for each forensic method via the `Descriptions/` section.
+1. **FR-01 Image ingestion**: upload a JPEG or PNG through the sidebar.
+2. **FR-02 Sample image**: load the bundled sample automatically when nothing
+   is uploaded (a known fabricated example).
+3. **FR-03 Technique navigation**: one tab per technique.
+4. **FR-04 Parameters**: ELA recompression quality slider (50–95); PRNU
+   reference-image upload; ledger label and note.
+5. **FR-05 Results**: every analysis shows a summary, metrics, findings
+   (info / notice / warning), images, tables and its limitations.
+6. **FR-06 Descriptions**: a "How this technique works" expander per tab,
+   loaded from `Descriptions/`.
+7. **FR-07 Ledger**: add the current image, check it against the session
+   ledger, export (signed when `LEDGER_KEY` is set) and import ledgers.
+8. **FR-08 Disclaimer**: an "indicators, not proof" notice on every page.
 
 ## 11. Non-Functional Requirements
 
-1. **NFR-01 Performance**: Typical analyses for images up to 12 megapixels should complete in under 5 seconds on a mid-range laptop.
-2. **NFR-02 Scalability**: The system should support concurrent users when deployed on a cloud platform, constrained mainly by the hosting provider.
-3. **NFR-03 Reliability**: The application should handle invalid or corrupted input images gracefully and display appropriate error messages.
-4. **NFR-04 Security**: Uploaded images should be processed in-memory or stored only temporarily; the system should not expose user data publicly.
-5. **NFR-05 Maintainability**: The codebase should be modular, with each analysis approach implemented in its own module under `analysis/`.
-6. **NFR-06 Portability**: The toolkit should be installable on different operating systems using a single `requirements.txt` file.
+1. **NFR-01 Fidelity**: analyses read the original file bytes; no re-encoding
+   before analysis.
+2. **NFR-02 Privacy**: uploads are stored in a per-session temporary
+   directory with random names; the ledger is per session.
+3. **NFR-03 Reliability**: analysis functions never raise; failures,
+   too-small and wrong-format inputs are reported as `error`,
+   `insufficient_data` or `not_applicable`.
+4. **NFR-04 Maintainability**: one module per technique, one shared result
+   contract, one renderer.
+5. **NFR-05 Calibration**: decision thresholds carry their measured
+   false-alarm rate.
+6. **NFR-06 Portability**: installable from one pinned `requirements.txt`.
 
 ## 12. Hardware and Software Requirements
 
-**Hardware Requirements**
+**Hardware**: dual-core CPU, 4 GB RAM (8 GB recommended for large images),
+1 GB disk for the environment.
 
-- CPU: Dual-core processor (Intel Core i5 or equivalent) or better.
-- Memory: Minimum 4 GB RAM (8 GB recommended).
-- Disk Space: At least 1 GB free space for Python environment, packages, and cached images.
-
-**Software Requirements**
-
-- Python 3.9+
-- `pip` or `conda` for dependency management.
-- Code editor such as Visual Studio Code or PyCharm.
-- Web browser (Chrome, Firefox, Edge) compatible with modern HTML5 features.
+**Software**: Python 3.10, `pip`, a modern browser; optionally an editor such
+as VS Code.
 
 ## 13. System Design
 
-The architecture of Veritas Forensics can be described in terms of layers and components.
+1. **Presentation layer** — `app.py` (Streamlit): sidebar upload, 13 tabs,
+   `render(result)` for every analysis, `describe(name)` for the guides.
+2. **Application logic** — `run_panel` (button, call, cache in
+   `st.session_state.results`, render), per-session `workdir()`, the ledger
+   in `st.session_state.ledger`, `LEDGER_KEY` from `st.secrets`.
+3. **Analysis layer** — `analysis/<module>.py`, one pure entry point per
+   technique returning the result contract of `analysis/util.py`.
+4. **Resources** — `assets/` (sample image, CSS) and `Descriptions/`.
 
-1. **Presentation Layer (UI)**
-
-   - Implemented with Streamlit in `app.py`.
-   - Responsible for rendering controls, handling image uploads, and displaying outputs.
-
-2. **Application Logic Layer**
-
-   - Contains the orchestration logic that selects which analysis routine to run based on user input.
-   - Manages session state (e.g., currently loaded image, current technique).
-
-3. **Analysis Modules Layer**
-
-   - Located in the `analysis/` directory.
-   - Each module (e.g., `ela.py`, `frequency_analysis.py`, `metadata_analysis.py`, `noise_analysis.py`) encapsulates a specific forensic method.
-
-4. **Resources and Documentation Layer**
-   - `assets/` contains sample images and static resources.
-   - `Descriptions/` contains technique-specific Markdown files used to educate users.
-
-A typical interaction flow is:
-
-User uploads or selects image → `app.py` reads image → image converted to appropriate format (NumPy array or PIL image) → selected analysis function is called → result (image/plot/text) returned → Streamlit renders the output.
+Flow: user uploads or uses the sample → the file is saved to the session
+directory → the user presses a tab's button → `run_panel` calls the entry
+point with the file path → the module decodes the original bytes, measures,
+and returns a result dict → `render` displays it.
 
 <div style="page-break-after: always;"></div>
 
@@ -217,594 +241,459 @@ User uploads or selects image → `app.py` reads image → image converted to ap
 
 ### 14.1. System Architecture Diagram
 
-The following diagram illustrates the overall system architecture with its three-tier design pattern:
-
 ```mermaid
 graph TB
-    subgraph "Presentation Layer"
-        UI[Streamlit Web Interface]
-        FileUpload[File Upload Component]
-        Sidebar[Sidebar Navigation]
-        Display[Result Display Area]
+    subgraph "Presentation Layer (app.py)"
+        Upload[Sidebar file_uploader]
+        Tabs[13 tabs]
+        Render[render result]
+        Describe[describe - Descriptions expander]
+        Disclaimer[Indicators, not proof notice]
     end
 
-    subgraph "Application Logic Layer"
-        AppController[app.py Controller]
-        SessionMgmt[Session State Manager]
-        Router[Analysis Router]
-        DescLoader[Description Loader]
+    subgraph "Application Logic (app.py)"
+        RunPanel[run_panel: button + cache]
+        Session[st.session_state: workdir, results, ledger]
+        Secrets[st.secrets LEDGER_KEY]
     end
 
-    subgraph "Analysis Modules Layer"
-        ELA[ela.py - Error Level Analysis]
-        META[metadata_analysis.py]
-        FREQ[frequency_analysis.py]
-        NOISE[noise_map.py]
-        HIST[histogram_analysis.py]
-        GHOST[jpeg_ghost.py]
-        QUANT[quant_table.py]
-        CMFD[cmfd.py - Copy-Move Detection]
-        PRNU[prnu.py - Sensor Fingerprint]
-        DEEP[deepfake_detector.py]
-        RESAMP[resampling_detector.py]
-        UTIL[util.py - Helper Functions]
+    subgraph "Analysis Layer (analysis/)"
+        ELA[ela.analyze_ela]
+        META[metadata_analysis.analyze_metadata]
+        HIST[histogram_analysis.analyze_histogram]
+        NOISE[noise_map.analyze_noise]
+        QUANT[quant_table.analyze_quantization_table]
+        DJPEG[double_jpeg.analyze_double_jpeg]
+        GHOST[jpeg_ghost.analyze_jpeg_ghost]
+        CMFD[cmfd.detect_copy_move]
+        PRNU[prnu.analyze_prnu]
+        FREQ[frequency_analysis.analyze_spectrum / analyze_blocking]
+        RESAMP[resampling_detector.detect_resampling]
+        SYN[deepfake_detector.analyze_synthetic_traces]
+        STEGO[steganography_detection.analyze_lsb]
+        HASH[hash_verification ledger functions]
+        UTIL[util: make_result, load_array, BAG grid]
     end
 
-    subgraph "Data Layer"
-        Assets[assets/ - Sample Images]
-        Desc[Descriptions/ - MD Files]
-        Temp[temp/ - Temporary Storage]
+    subgraph "Resources"
+        Assets[assets/ sample image]
+        Desc[Descriptions/*.md]
+        Temp[per-session temp dir]
     end
 
-    UI --> AppController
-    FileUpload --> AppController
-    Sidebar --> Router
-
-    AppController --> SessionMgmt
-    AppController --> Router
-    AppController --> DescLoader
-
-    Router --> ELA
-    Router --> META
-    Router --> FREQ
-    Router --> NOISE
-    Router --> HIST
-    Router --> GHOST
-    Router --> QUANT
-    Router --> CMFD
-    Router --> PRNU
-    Router --> DEEP
-    Router --> RESAMP
-
-    ELA --> UTIL
-    META --> UTIL
-    FREQ --> UTIL
-    NOISE --> UTIL
-
-    AppController --> Assets
-    DescLoader --> Desc
-    AppController --> Temp
-
-    ELA --> Display
-    META --> Display
-    FREQ --> Display
-    NOISE --> Display
-    HIST --> Display
-    GHOST --> Display
-    QUANT --> Display
-    CMFD --> Display
-    PRNU --> Display
-    DEEP --> Display
-    RESAMP --> Display
+    Upload --> Session
+    Session --> Temp
+    Tabs --> RunPanel
+    RunPanel --> ELA & META & HIST & NOISE & QUANT & DJPEG & GHOST
+    RunPanel --> CMFD & PRNU & FREQ & RESAMP & SYN & STEGO & HASH
+    ELA & META & HIST & NOISE & QUANT & DJPEG & GHOST --> UTIL
+    CMFD & PRNU & FREQ & RESAMP & SYN & STEGO & HASH --> UTIL
+    RunPanel --> Session
+    RunPanel --> Render
+    Secrets --> HASH
+    Describe --> Desc
+    Session --> Assets
 ```
 
 ### 14.2. Use Case Diagram
 
-This diagram shows the interactions between different user types and the system:
-
 ```mermaid
 graph LR
-    User((User/Analyst))
+    User((Analyst))
     Student((Student))
     Researcher((Researcher))
 
-    subgraph "Veritas Forensics System"
-        UC1[Upload Image]
-        UC2[Select Analysis Technique]
-        UC3[Adjust Parameters]
-        UC4[View Results]
-        UC5[Read Technique Descriptions]
-        UC6[Load Sample Images]
-        UC7[Export Analysis]
-        UC8[Compare Multiple Analyses]
-        UC9[View Metadata]
-        UC10[Detect Forgery]
+    subgraph "Veritas"
+        UC1[Upload image]
+        UC2[Use bundled sample]
+        UC3[Run a technique]
+        UC4[Adjust parameters]
+        UC5[Read findings, metrics and limitations]
+        UC6[Read technique description]
+        UC7[Supply PRNU reference images]
+        UC8[Add image to session ledger]
+        UC9[Check image against ledger]
+        UC10[Export / import signed ledger]
     end
 
     User --> UC1
-    User --> UC2
     User --> UC3
-    User --> UC4
-    User --> UC7
-
-    Student --> UC5
+    User --> UC5
+    User --> UC8
+    User --> UC9
+    User --> UC10
+    Student --> UC2
     Student --> UC6
-    Student --> UC4
+    Student --> UC3
+    Researcher --> UC4
+    Researcher --> UC7
+    Researcher --> UC5
 
-    Researcher --> UC8
-    Researcher --> UC10
-    Researcher --> UC9
-
-    UC1 -.includes.-> UC6
-    UC2 -.includes.-> UC5
-    UC4 -.includes.-> UC9
-    UC10 -.includes.-> UC2
+    UC1 -.or.-> UC2
+    UC3 -.includes.-> UC5
+    UC9 -.includes.-> UC8
 ```
 
 ### 14.3. Sequence Diagram
-
-This diagram illustrates the typical workflow when a user performs image analysis:
 
 ```mermaid
 sequenceDiagram
     actor User
     participant UI as Streamlit UI
     participant App as app.py
-    participant Session as Session State
-    participant Router as Analysis Router
-    participant Module as Analysis Module
-    participant Util as Utility Functions
+    participant Session as st.session_state
+    participant Module as analysis.ela
+    participant Util as analysis.util
 
-    User->>UI: Upload Image File
-    UI->>App: File Object
-    App->>Session: Store Image
-    Session-->>App: Confirmation
+    User->>UI: Upload image
+    UI->>App: UploadedFile
+    App->>App: sha256(upload) differs from image_digest?
+    App->>Session: save_upload() to workdir/uuid.ext, clear results
 
-    User->>UI: Select Technique (e.g., ELA)
-    UI->>App: Technique Selection
-    App->>Router: Route to ELA Module
+    User->>UI: Set ELA quality = 90, press "Run ELA"
+    UI->>App: run_panel("ela", ..., quality=90)
+    App->>Module: analyze_ela(path, quality=90)
+    Module->>Util: load_array(path) (no re-encode)
+    Util-->>Module: float array
+    Module->>Module: resave in memory, error map, median-relative mask
+    Module->>Util: make_result(status, summary, findings, metrics, images, ...)
+    Util-->>Module: result dict
+    Module-->>App: result dict
+    App->>Session: results["ela"] = result
+    App->>UI: render(result)
+    UI-->>User: summary, metrics, findings, maps, limitations
 
-    User->>UI: Adjust Parameters (Quality: 90)
-    UI->>App: Updated Parameters
-
-    App->>Module: Call analyze_ela(image, quality=90)
-    Module->>Util: Load & Preprocess Image
-    Util-->>Module: Processed Image Array
-
-    Module->>Module: Perform ELA Algorithm
-    Module->>Util: Convert Result to Display Format
-    Util-->>Module: Display-ready Image
-
-    Module-->>Router: Analysis Result
-    Router-->>App: Result Data
-    App->>Session: Cache Result
-    App->>UI: Render Result
-    UI-->>User: Display ELA Heatmap
-
-    User->>UI: Click "View Description"
-    UI->>App: Request ELA Description
-    App->>App: Load Descriptions/ELA.md
-    App->>UI: Render Markdown
-    UI-->>User: Show Educational Content
+    User->>UI: Open "How this technique works"
+    App->>App: load_description("ELA")
+    App->>UI: Markdown from Descriptions/ELA.md
 ```
 
 ### 14.4. Class Diagram
 
-This diagram represents the key modules and their relationships:
+The modules are function-based; each box is a module with its public
+functions.
 
 ```mermaid
 classDiagram
-    class AppController {
-        +session_state: dict
-        +load_image()
-        +save_uploaded_file()
-        +load_description()
-        +render_sidebar()
-        +route_analysis()
+    class app_py {
+        +workdir()
+        +save_upload(uploaded, subdir)
+        +load_description(name)
+        +render(result)
+        +run_panel(key, label, fn, *args, **kwargs)
+        +describe(name)
+    }
+    class util {
+        +STATUSES
+        +LEVELS
+        +make_result(status, summary, findings, metrics, images, tables, limitations, details)
+        +error_result(exc, limitations)
+        +load_array(path, mode, max_px)
+        +to_uint8(arr, stretch)
+        +overlay_mask(rgb, mask, color, alpha)
+        +jpeg_grid_offset(gray)
+    }
+    class ela { +analyze_ela(path, quality=90) }
+    class metadata_analysis { +analyze_metadata(path) +read_c2pa(path) }
+    class histogram_analysis { +analyze_histogram(path) }
+    class noise_map { +analyze_noise(path) }
+    class quant_table {
+        +analyze_quantization_table(path)
+        +extract_jpeg_quantization_tables(path)
+        +estimate_jpeg_quality(qtable, table_id)
+        +is_standard_table(qtable, table_id, tolerance)
+    }
+    class double_jpeg { +analyze_double_jpeg(path) }
+    class jpeg_ghost { +analyze_jpeg_ghost(path, qualities) }
+    class cmfd { +detect_copy_move(path, max_px=2048) }
+    class prnu { +analyze_prnu(path, reference_paths, max_px=2048) }
+    class frequency_analysis { +analyze_spectrum(path) +analyze_blocking(path) }
+    class resampling_detector { +detect_resampling(path) }
+    class deepfake_detector { +analyze_synthetic_traces(path) }
+    class steganography_detection { +analyze_lsb(path) }
+    class hash_verification {
+        +compute_hashes(path)
+        +new_ledger()
+        +add_record(ledger, path, label, note)
+        +verify_chain(ledger)
+        +verify_image(ledger, path, threshold)
+        +export_ledger(ledger, key)
+        +import_ledger(data, key, into)
+        +ledger_stats(ledger)
     }
 
-    class ELAAnalyzer {
-        +quality: int
-        +scale: int
-        +convert_to_ela_image()
-        +calculate_error_level()
-        +generate_heatmap()
-    }
-
-    class MetadataAnalyzer {
-        +extract_exif()
-        +extract_iptc()
-        +extract_xmp()
-        +check_thumbnail_consistency()
-        +format_metadata_display()
-    }
-
-    class FrequencyAnalyzer {
-        +compute_fft()
-        +compute_dct()
-        +calculate_magnitude_spectrum()
-        +detect_periodic_artifacts()
-        +generate_frequency_score()
-    }
-
-    class NoiseAnalyzer {
-        +estimate_noise_variance()
-        +compute_local_noise()
-        +generate_noise_map()
-        +detect_inconsistencies()
-    }
-
-    class HistogramAnalyzer {
-        +compute_histogram()
-        +analyze_color_distribution()
-        +detect_anomalies()
-        +plot_histogram()
-    }
-
-    class JPEGGhostAnalyzer {
-        +detect_jpeg_ghosts()
-        +multiple_quality_analysis()
-        +find_optimal_quality()
-    }
-
-    class CMFDAnalyzer {
-        +detect_copy_move()
-        +extract_keypoints()
-        +match_features()
-        +visualize_duplicates()
-    }
-
-    class PRNUAnalyzer {
-        +extract_prnu_pattern()
-        +calculate_correlation()
-        +detect_splicing()
-    }
-
-    class DeepfakeDetector {
-        +load_model()
-        +preprocess_image()
-        +predict_authenticity()
-        +get_confidence_score()
-    }
-
-    class UtilityFunctions {
-        +load_image()
-        +convert_color_space()
-        +resize_image()
-        +normalize_array()
-        +save_temp_file()
-    }
-
-    AppController --> ELAAnalyzer : uses
-    AppController --> MetadataAnalyzer : uses
-    AppController --> FrequencyAnalyzer : uses
-    AppController --> NoiseAnalyzer : uses
-    AppController --> HistogramAnalyzer : uses
-    AppController --> JPEGGhostAnalyzer : uses
-    AppController --> CMFDAnalyzer : uses
-    AppController --> PRNUAnalyzer : uses
-    AppController --> DeepfakeDetector : uses
-
-    ELAAnalyzer --> UtilityFunctions : depends on
-    MetadataAnalyzer --> UtilityFunctions : depends on
-    FrequencyAnalyzer --> UtilityFunctions : depends on
-    NoiseAnalyzer --> UtilityFunctions : depends on
-    HistogramAnalyzer --> UtilityFunctions : depends on
+    app_py --> ela
+    app_py --> metadata_analysis
+    app_py --> histogram_analysis
+    app_py --> noise_map
+    app_py --> quant_table
+    app_py --> double_jpeg
+    app_py --> jpeg_ghost
+    app_py --> cmfd
+    app_py --> prnu
+    app_py --> frequency_analysis
+    app_py --> resampling_detector
+    app_py --> deepfake_detector
+    app_py --> steganography_detection
+    app_py --> hash_verification
+    app_py --> util : error_result
+    double_jpeg --> quant_table : Q table, quality
+    jpeg_ghost --> quant_table : primary quality
+    deepfake_detector --> prnu : noise_extract
+    ela ..> util
+    cmfd ..> util
+    frequency_analysis ..> util : BAG grid
+    resampling_detector ..> util : grid strength
 ```
 
 ### 14.5. Activity Diagram
 
-This diagram shows the complete workflow of image forensic analysis:
-
 ```mermaid
 flowchart TD
-    Start([User Opens Application]) --> CheckImage{Image Uploaded?}
+    Start([User opens app]) --> Uploaded{Image uploaded?}
+    Uploaded -->|No| Sample[Use bundled sample image]
+    Uploaded -->|Yes| NewImg{New content? sha256}
+    NewImg -->|Yes| Save[Save to per-session temp dir, clear cached results]
+    NewImg -->|No| Show
+    Save --> Show[Show image + disclaimer]
+    Sample --> Show
 
-    CheckImage -->|No| LoadSample[Load Sample Image from assets/]
-    CheckImage -->|Yes| ProcessUpload[Process Uploaded File]
-
-    LoadSample --> DisplayImage[Display Image in UI]
-    ProcessUpload --> SaveTemp[Save to temp/ Directory]
-    SaveTemp --> DisplayImage
-
-    DisplayImage --> SelectTechnique{Select Analysis Technique}
-
-    SelectTechnique -->|ELA| ConfigELA[Configure ELA Parameters]
-    SelectTechnique -->|Metadata| RunMeta[Extract Metadata]
-    SelectTechnique -->|Frequency| ConfigFFT[Configure FFT/DCT]
-    SelectTechnique -->|Noise| RunNoise[Compute Noise Map]
-    SelectTechnique -->|Histogram| RunHist[Generate Histogram]
-    SelectTechnique -->|JPEG Ghost| ConfigGhost[Set Quality Range]
-    SelectTechnique -->|CMFD| RunCMFD[Detect Copy-Move]
-    SelectTechnique -->|PRNU| RunPRNU[Extract PRNU Pattern]
-    SelectTechnique -->|Deepfake| RunDeep[Run AI Detection]
-
-    ConfigELA --> RunELA[Perform ELA Analysis]
-    ConfigFFT --> RunFFT[Perform Frequency Analysis]
-    ConfigGhost --> RunGhost[Perform Ghost Analysis]
-
-    RunELA --> DisplayResults[Display Results]
-    RunMeta --> DisplayResults
-    RunFFT --> DisplayResults
-    RunNoise --> DisplayResults
-    RunHist --> DisplayResults
-    RunGhost --> DisplayResults
-    RunCMFD --> DisplayResults
-    RunPRNU --> DisplayResults
-    RunDeep --> DisplayResults
-
-    DisplayResults --> ViewDesc{View Description?}
-
-    ViewDesc -->|Yes| LoadDesc[Load Technique Description MD]
-    ViewDesc -->|No| MoreAnalysis{Run Another Analysis?}
-
-    LoadDesc --> ShowDesc[Render Educational Content]
-    ShowDesc --> MoreAnalysis
-
-    MoreAnalysis -->|Yes| SelectTechnique
-    MoreAnalysis -->|No| Export{Export Results?}
-
-    Export -->|Yes| SaveResults[Save/Download Results]
-    Export -->|No| End([End Session])
-
-    SaveResults --> End
+    Show --> Tab{Choose tab}
+    Tab --> Desc[Optional: read description]
+    Desc --> Params[Set parameters: ELA quality, PRNU references, ledger label]
+    Tab --> Params
+    Params --> Run[Press run button]
+    Run --> Call[Entry point on original file]
+    Call --> Status{status}
+    Status -->|ok| Render[Render summary, metrics, findings, images, tables]
+    Status -->|insufficient_data / not_applicable| Warn[Show reason]
+    Status -->|error| Err[Show error summary]
+    Render --> Lim[Limitations expander]
+    Warn --> Lim
+    Err --> Lim
+    Lim --> More{Another test?}
+    More -->|Yes| Tab
+    More -->|No| Ledger{Keep a record?}
+    Ledger -->|Yes| Export[Add to ledger, export JSON]
+    Ledger -->|No| End([End session: temp files and ledger discarded])
+    Export --> End
 ```
 
 ### 14.6. Component Diagram
 
-This diagram illustrates the modular structure of the system:
-
 ```mermaid
 graph TB
-    subgraph "Frontend Components"
-        StreamlitUI[Streamlit UI Framework]
-        FileUploader[File Uploader Widget]
-        Sidebar[Sidebar Navigator]
-        ResultRenderer[Result Display]
-        ParameterControls[Parameter Controls]
+    subgraph "Frontend (Streamlit)"
+        Uploader[file_uploader]
+        TabBar[st.tabs x13]
+        Metrics[st.metric / st.image / st.dataframe]
+        Expanders[Descriptions, Limitations, Raw values]
     end
 
-    subgraph "Core Application"
-        MainApp[app.py]
-        SessionManager[Session State]
-        AnalysisRouter[Technique Router]
+    subgraph "Core (app.py)"
+        RunPanel[run_panel]
+        Renderer[render]
+        SessionState[session_state]
     end
 
-    subgraph "Analysis Components"
-        direction LR
-
-        subgraph "Basic Techniques"
-            ELAComp[ELA Component]
-            MetaComp[Metadata Component]
-            HistComp[Histogram Component]
+    subgraph "Analysis components"
+        subgraph "Compression"
+            ELAc[ELA]
+            QTc[Quantization tables]
+            DJc[Double-JPEG]
+            GHc[JPEG ghosts]
+            BAGc[Block grid]
         end
-
-        subgraph "Advanced Techniques"
-            FreqComp[Frequency Analysis]
-            NoiseComp[Noise Analysis]
-            GhostComp[JPEG Ghost]
+        subgraph "Content & statistics"
+            HISTc[Histogram]
+            NOISEc[Noise]
+            SPECc[Spectrum]
+            CMFDc[Copy-move]
+            RESc[Resampling]
+            SYNc[Synthetic traces - Experimental]
+            STEGc[LSB steganalysis]
         end
-
-        subgraph "ML-Based Techniques"
-            CMFDComp[CMFD Component]
-            PRNUComp[PRNU Component]
-            DeepComp[Deepfake Detector]
-            ResampComp[Resampling Detector]
+        subgraph "Source & provenance"
+            METAc[Metadata + C2PA]
+            PRNUc[PRNU]
+            HASHc[Hash ledger]
         end
     end
 
-    subgraph "Utility Layer"
-        ImageUtils[Image Utilities]
-        FileUtils[File Handlers]
-        MathUtils[Math Functions]
+    subgraph "Shared"
+        Contract[util.make_result]
+        Decode[util.load_array]
+        Grid[util BAG helpers]
     end
 
-    subgraph "External Libraries"
+    subgraph "Libraries"
+        NumPy[NumPy / SciPy / scikit-image]
         OpenCV[OpenCV]
-        NumPy[NumPy]
-        Pillow[Pillow/PIL]
-        SciPy[SciPy]
+        Pillow[Pillow / piexif]
+        PyWavelets[PyWavelets]
         Matplotlib[Matplotlib]
+        ImageHash[ImageHash]
+        C2PA[c2pa-python]
     end
 
-    subgraph "Data Storage"
-        AssetsDir[assets/ - Samples]
-        DescDir[Descriptions/ - Docs]
-        TempDir[temp/ - Cache]
-    end
-
-    StreamlitUI --> MainApp
-    FileUploader --> MainApp
-    Sidebar --> AnalysisRouter
-    ParameterControls --> MainApp
-
-    MainApp --> SessionManager
-    MainApp --> AnalysisRouter
-
-    AnalysisRouter --> ELAComp
-    AnalysisRouter --> MetaComp
-    AnalysisRouter --> HistComp
-    AnalysisRouter --> FreqComp
-    AnalysisRouter --> NoiseComp
-    AnalysisRouter --> GhostComp
-    AnalysisRouter --> CMFDComp
-    AnalysisRouter --> PRNUComp
-    AnalysisRouter --> DeepComp
-    AnalysisRouter --> ResampComp
-
-    ELAComp --> ImageUtils
-    FreqComp --> MathUtils
-    MetaComp --> FileUtils
-
-    ImageUtils --> OpenCV
-    ImageUtils --> NumPy
-    ImageUtils --> Pillow
-    MathUtils --> NumPy
-    MathUtils --> SciPy
-
-    ELAComp --> ResultRenderer
-    MetaComp --> ResultRenderer
-    FreqComp --> ResultRenderer
-
-    MainApp --> AssetsDir
-    MainApp --> DescDir
-    MainApp --> TempDir
+    Uploader --> SessionState
+    TabBar --> RunPanel
+    RunPanel --> Renderer
+    Renderer --> Metrics
+    Renderer --> Expanders
+    RunPanel --> ELAc & QTc & DJc & GHc & BAGc & HISTc & NOISEc & SPECc
+    RunPanel --> CMFDc & RESc & SYNc & STEGc & METAc & PRNUc & HASHc
+    ELAc & HISTc & NOISEc & CMFDc & PRNUc & SPECc & RESc & SYNc & STEGc --> Decode
+    BAGc & RESc & SYNc --> Grid
+    ELAc & QTc & DJc & GHc & BAGc & HISTc & NOISEc & SPECc --> Contract
+    CMFDc & RESc & SYNc & STEGc & METAc & PRNUc & HASHc --> Contract
+    CMFDc --> OpenCV
+    PRNUc --> PyWavelets
+    NOISEc --> PyWavelets
+    METAc --> C2PA
+    HASHc --> ImageHash
 ```
 
 ### 14.7. Deployment Diagram
 
-This diagram shows how the application is deployed:
-
 ```mermaid
 graph TB
-    subgraph "Client Tier"
-        Browser1[Web Browser - Chrome]
-        Browser2[Web Browser - Firefox]
-        Browser3[Web Browser - Edge]
+    subgraph "Client"
+        Browser[Web browser]
     end
 
-    subgraph "Application Server"
-        subgraph "Streamlit Server"
-            StreamlitApp[Streamlit Application]
-            WSGIServer[WSGI/ASGI Server]
+    subgraph "Host (Streamlit Cloud, Docker or VM)"
+        subgraph "Streamlit server"
+            App[app.py]
+            Sessions[Per-session state: results, ledger]
         end
-
-        subgraph "Python Runtime"
-            AppLogic[app.py Main Logic]
-            AnalysisModules[Analysis Modules]
-            Dependencies[Python Libraries]
+        subgraph "Python 3.10 runtime"
+            Analysis[analysis/ modules]
+            Libs[Pinned requirements.txt]
         end
-
-        subgraph "File System"
-            StaticAssets[assets/ Directory]
-            Descriptions[Descriptions/ MD Files]
-            TempFiles[temp/ Directory]
-            ConfigFiles[.streamlit/ Config]
+        subgraph "File system"
+            Assets[assets/ + Descriptions/]
+            Config[.streamlit/config.toml]
+            Secrets[secrets: LEDGER_KEY optional]
+            Tmp[System temp: veritas_* per session]
         end
     end
 
-    subgraph "Deployment Options"
-        LocalHost[Local Development<br/>localhost:8501]
-        StreamlitCloud[Streamlit Cloud<br/>app.streamlit.io]
-        CustomServer[Custom Server<br/>VPS/Cloud VM]
+    subgraph "Build-time only"
+        PyPI[PyPI]
+        GitHub[GitHub]
     end
 
-    subgraph "External Dependencies"
-        PyPI[PyPI - Package Repository]
-        GitHub[GitHub - Source Code]
-        CDN[CDN - Static Resources]
-    end
-
-    Browser1 -->|HTTP/HTTPS| StreamlitApp
-    Browser2 -->|HTTP/HTTPS| StreamlitApp
-    Browser3 -->|HTTP/HTTPS| StreamlitApp
-
-    StreamlitApp --> WSGIServer
-    WSGIServer --> AppLogic
-    AppLogic --> AnalysisModules
-    AnalysisModules --> Dependencies
-
-    AppLogic --> StaticAssets
-    AppLogic --> Descriptions
-    AppLogic --> TempFiles
-    StreamlitApp --> ConfigFiles
-
-    StreamlitApp -.Deploy.-> LocalHost
-    StreamlitApp -.Deploy.-> StreamlitCloud
-    StreamlitApp -.Deploy.-> CustomServer
-
-    Dependencies -.Install from.-> PyPI
-    AppLogic -.Source from.-> GitHub
-    StreamlitApp -.Load Assets.-> CDN
-
-    style LocalHost fill:#e1f5ff
-    style StreamlitCloud fill:#d4edda
-    style CustomServer fill:#fff3cd
+    Browser -->|HTTPS + WebSocket| App
+    App --> Sessions
+    App --> Analysis
+    Analysis --> Libs
+    App --> Assets
+    App --> Config
+    App --> Secrets
+    App --> Tmp
+    Libs -.installed from.-> PyPI
+    App -.deployed from.-> GitHub
 ```
 
 <div style="page-break-after: always;"></div>
 
 ## 15. Implementation Details
 
-- **Image Handling**:  
-  PIL and OpenCV are used in combination. PIL is convenient for EXIF metadata parsing, while OpenCV is optimized for pixel-level operations and frequency transforms.
+- **Decoding**: `util.load_array` decodes with Pillow to a float array
+  without re-encoding and without applying EXIF orientation (compression
+  grids, PRNU and CFA traces live in the stored pixel order). JPEG-specific
+  modules read the quantization tables through Pillow's decoder.
+- **Result contract**: every entry point returns `util.make_result(...)`;
+  images are uint8 arrays (matplotlib figures are rasterised in memory with
+  `fig_to_array`). See [API.md](API.md).
+- **Large images**: copy-move downscales in memory to 2048 px (reported);
+  PRNU, the power spectrum and the synthetic-traces analysis crop instead of
+  resizing, because resizing creates or destroys the traces they measure.
+- **Calibration**: decision constants sit at the top of each module with a
+  comment citing the seeded benchmark that set them. The measured detection
+  and false-alarm rates are in each `Descriptions/*.md`.
+- **Ledger**: records are hash-chained (`prev_hash` → `record_hash`); exports
+  are signed with HMAC-SHA256 when the server has `LEDGER_KEY`, otherwise
+  carry a plain SHA-256 digest.
+- **Technique descriptions**: `describe(name)` renders
+  `Descriptions/<name>.md` in an expander at the top of each tab.
 
-- **Error Level Analysis (ELA)**:  
-  The implemented ELA routine rescales the image, saves it to an in-memory buffer at a specified JPEG quality, reloads it, and computes the absolute difference. The difference image is then amplified and mapped to a visually meaningful color range.
-
-- **Frequency Analysis**:  
-  Images are converted to grayscale and normalized. The Discrete Fourier Transform is computed using NumPy or OpenCV’s DFT. The magnitude spectrum is shifted and log-scaled to make subtle patterns visible.
-
-- **Metadata Analysis**:  
-  The EXIF dictionary is retrieved from the PIL image object. Keys are mapped to human-readable tag names and displayed in a structured table within Streamlit.
-
-- **Noise-Based Analysis**:  
-  Local variance filters and simple denoising operations are used to approximate noise levels across different regions, which may reveal pasted or altered segments.
-
-- **Technique Descriptions**:  
-  The sidebar includes buttons or selectors that, when clicked, load Markdown files from `Descriptions/` and render them in the main area, providing theoretical background and interpretation tips.
+Per-technique method summaries: [TECHNIQUES.md](TECHNIQUES.md).
 
 ## 16. Development Tools and Technologies
 
-- **Version Control**: Git with GitHub as the remote repository for collaboration and backup.
-- **IDE/Editor**: Visual Studio Code with Python and Git integrations.
-- **Issue Tracking**: GitHub Issues (optional) for tracking tasks and bugs.
-- **Virtual Environments**: `venv` or `conda` for dependency isolation.
-- **Automation**: `pytest` for running automated tests; `pre-commit` hooks (if configured) for linting or formatting.
+- **Version control**: Git / GitHub.
+- **Editor**: Visual Studio Code.
+- **Environment**: `venv` with pinned `requirements.txt`.
+- **Testing**: standard-library `unittest`
+  (`python -m unittest discover -s tests -t .`).
+- **Optional**: `pre-commit`, black, isort, flake8 (`requirements-dev.txt`).
 
 ## 17. Programming Languages and Frameworks
 
-- **Python**: Core implementation language for all backend and analytical logic.
-- **Streamlit**: Framework for constructing the interactive web interface directly from Python scripts.
-- **OpenCV**: Library used for advanced image processing operations.
-- **NumPy/SciPy**: Libraries for numerical operations and signal processing functions.
-- **Matplotlib/Plotly**: Libraries for plotting histograms, distributions, and spectrogram-like visualizations.
+- **Python 3.10** for everything.
+- **Streamlit** for the web interface.
+- **NumPy / SciPy / scikit-image / PyWavelets** for signal processing,
+  wavelets and statistics.
+- **OpenCV** for SIFT, RANSAC and warping (copy-move).
+- **Pillow / piexif** for decoding, EXIF and quantization tables;
+  **c2pa-python** for Content Credentials; **ImageHash** for perceptual
+  hashes.
+- **Matplotlib** for plots, rasterised to arrays.
 
 ## 18. Testing Strategy
 
-1. **Unit Testing**
+126 automated tests:
 
-   - Individual functions in analysis modules are tested with controlled input images (e.g., uniform images, synthetic patterns) to verify expected outputs.
-   - Example tests include checking array dimensions, valid ranges of pixel values, and correct handling of boundary conditions.
-
-2. **Integration Testing**
-
-   - Verifies that `app.py` correctly wires user interactions to analysis functions.
-   - Checks that uploaded images propagate through the system without type or shape mismatches.
-
-3. **System Testing**
-
-   - End-to-end tests involve using the web interface to load images, switch techniques, and verify that each analysis path produces a result without errors.
-   - Sample images with known manipulations are used to confirm that artifacts are visible in the expected modules.
-
-4. **User Acceptance Testing (UAT)**
-   - Informal testing sessions with classmates or peers assess usability: clarity of labels, responsiveness, and perceived usefulness of visualizations.
-   - Feedback from these sessions informs UI adjustments and documentation improvements.
+1. **Contract tests** (`tests/test_contract.py`): every entry point on JPEG,
+   PNG, grayscale, RGBA, palette, 16×16, 1×1 and flat inputs must return the
+   contract without raising; tiny and flat inputs must not look clean;
+   overclaiming words ("authentic", "admissible", "proves", "no
+   manipulation") are rejected.
+2. **Per-module tests** (`tests/test_<module>.py`): behaviour on controlled
+   inputs plus seeded synthetic benchmarks (e.g. splices at several JPEG
+   qualities, clones at arbitrary offsets/rotations, rescaled regions, LSB
+   payloads, synthetic PRNU) asserting a minimum detection rate and a
+   maximum false-alarm rate.
+3. **Manual system testing**: `streamlit run app.py`, every tab on the sample
+   and on one fixture per case; two browser sessions uploading the same file
+   name must not see each other's files or ledger.
 
 ## 19. Results and Discussion
 
-The implemented toolkit shows promising results in several dimensions:
+- **Coverage**: all thirteen tabs run through one renderer; tab/module key
+  mismatches, which broke several tabs before 3.0.0, can no longer occur.
+- **Measured performance**: each technique's detection and false-alarm rates
+  on its seeded benchmark are stated in its Description rather than claimed
+  in general terms. Rates vary strongly with JPEG quality, region size and
+  post-processing.
+- **Sample image**: the bundled image is a known fabricated example (C2PA
+  declares `compositeWithTrainedAlgorithmicMedia`, copy-moved clouds, stale
+  EXIF thumbnail); Metadata, Copy-Move and several JPEG tabs report findings
+  on it.
 
-- **Functional Coverage**: All planned modules (ELA, Metadata, Histogram, Noise, Frequency) are operational within the unified interface.
-- **Usability**: Streamlit’s straightforward layout and live-reload behavior simplified experimentation. Users reported that the "sample image" feature and descriptive text reduced the initial learning curve.
-- **Analytical Value**: In test cases involving spliced images and re-compressed photographs, ELA and frequency analysis consistently highlighted suspicious regions.
+Limitations:
 
-However, there are limitations:
+- The toolkit does not classify images as edited or unedited; it reports
+  indicators for human interpretation.
+- Benchmarks are synthetic; no evaluation on public forensic datasets is
+  included.
+- Resizing, strong recompression and format conversion remove most traces.
+- The synthetic-traces tab cannot identify AI-generated images.
 
-- The toolkit does not automatically classify images as authentic or forged; it relies on human interpretation.
-- Extremely high-resolution images may lead to slower processing times depending on hardware.
-- The current noise analysis is heuristic and does not reach the rigor of full PRNU-based methods.
-
-These observations suggest that Veritas Forensics is well-suited for **preliminary screening and educational use**, while more specialized tools may still be needed for high-stakes forensic investigations.
+Veritas is suited to **screening and teaching**; high-stakes work needs
+specialised tools, provenance data and expert review.
 
 ## 20. Conclusion
 
-Veritas Forensics demonstrates that a carefully designed, open-source toolkit can make advanced digital image forensic methods more accessible to students, researchers, and practitioners. By combining multiple analysis techniques in a single interface and emphasizing interpretability, the project meets its objectives of integration, usability, and educational value.
+Veritas shows that an open-source toolkit can make published image-forensics
+methods accessible while being explicit about what each one can and cannot
+show. The 3.0.0 rebuild replaced heuristic scores with published methods,
+calibrated thresholds, a single result contract and per-session privacy.
 
-Future enhancements may include:
+Future work:
 
-- Incorporating machine learning models for forgery localization.
-- Adding support for video frames and temporal analysis.
-- Providing exportable reports that summarize key findings from each module.
-
-Overall, the project highlights the importance of combining **sound academic foundations** with **practical software engineering** to address the evolving challenge of verifying digital imagery.
+- Evaluation on public datasets (CoMoFoD, CASIA v2, Columbia, RAISE, Dresden).
+- Exportable reports listing every test, finding and limitation.
+- Trusted timestamping (RFC 3161) for ledger exports.
